@@ -54,6 +54,27 @@ const Map<NpcPersonality, List<String>> kBumpLinesByPersonality = {
   ],
 };
 
+/// Lines NPCs say when they've been outright run over (tier-2 bump).
+const Map<NpcPersonality, List<String>> _painLinesByPersonality = {
+  NpcPersonality.browser: ['OW!', 'What the—?!', 'Hey watch where—', 'Ugh.'],
+  NpcPersonality.couponer: [
+    'Well I never!',
+    'My HIP!',
+    'Someone call the manager!',
+  ],
+  NpcPersonality.parent: [
+    'Oh no, you okay buddy?',
+    'Seriously?!',
+    'We\'re leaving.',
+  ],
+  NpcPersonality.rusher: ['OOF!', 'FORGET THIS.', '#@!*'],
+  NpcPersonality.worker: [
+    'You OK pal?',
+    'I\'ll report this.',
+    'Dude.',
+  ],
+};
+
 /// Lines NPCs say when they've just stolen an item from the player's cart.
 const List<String> kThiefLines = [
   'Finders keepers.',
@@ -159,6 +180,12 @@ class GroceryDashGame extends FlameGame {
 
   /// Identity set so we only announce each pallet once when it appears.
   final Set<Pallet> _announcedPallets = {};
+
+  /// Transient camera shake — decays to 0 over ~0.4s after a big impact.
+  double _shake = 0;
+  double _shakeX = 0;
+  double _shakeY = 0;
+  final math.Random _shakeRng = math.Random();
 
   /// All slots on the same shelf face as the currently focused slot. Used
   /// by the HUD shelf-face selector. Groups by matching `facing` sign and
@@ -393,6 +420,17 @@ class GroceryDashGame extends FlameGame {
 
     // Tick the announcement queue
     announcements.tick(dt);
+
+    // Decay screen shake
+    if (_shake > 0) {
+      _shake = math.max(0, _shake - dt * 2.5);
+      final m = _shake * 16;
+      _shakeX = (_shakeRng.nextDouble() * 2 - 1) * m;
+      _shakeY = (_shakeRng.nextDouble() * 2 - 1) * m;
+    } else {
+      _shakeX = 0;
+      _shakeY = 0;
+    }
 
     // Update the shopping-list compass hint
     _updateCompass();
@@ -748,6 +786,10 @@ class GroceryDashGame extends FlameGame {
     final radius = pushing ? _cartRadius + 18 : _playerRadius + 18;
     final px = pushing ? cart.x : player.x;
     final py = pushing ? cart.y : player.y;
+    // Speed at the moment of impact — drives the tier decision.
+    final impactSpeed = pushing
+        ? math.sqrt(cart.vx * cart.vx + cart.vy * cart.vy)
+        : math.sqrt(player.vx * player.vx + player.vy * player.vy);
     for (final n in storeWorld.npcs) {
       if (n.consumed) continue;
       if (n.isStunned) continue;
@@ -758,18 +800,37 @@ class GroceryDashGame extends FlameGame {
         final d = math.sqrt(d2);
         final nx = d == 0 ? 0 : dx / d;
         final ny = d == 0 ? 0 : dy / d;
-        // Push NPC aside by a small amount
-        n.x += nx * 8;
-        n.y += ny * 8;
-        // Briefly stun NPC so they reconsider their path
+        // ---------- Tiered impact ----------
+        // light: < 90 px/s — nudge, dialogue, no stun
+        // medium: 90..170 — NPC pushed harder, stun 0.6s, bigger shake
+        // heavy: >170 — NPC fully knocked down 2.2s, screen shake, LOUD thud
+        final int tier;
+        if (impactSpeed > 170) {
+          tier = 2;
+        } else if (impactSpeed > 90) {
+          tier = 1;
+        } else {
+          tier = 0;
+        }
+        final knockDist = switch (tier) { 0 => 8.0, 1 => 22.0, _ => 46.0 };
+        n.x += nx * knockDist;
+        n.y += ny * knockDist;
         if (n.state == NpcState.browsing ||
             n.state == NpcState.crossing) {
           n.state = NpcState.stunned;
-          n.stateTimer = 0.4;
+          n.stateTimer = switch (tier) { 0 => 0.4, 1 => 1.0, _ => 2.2 };
         }
-        final pool = kBumpLinesByPersonality[n.personality] ??
-            kBumpLinesByPersonality[NpcPersonality.browser]!;
-        _npcSay(n, pool, duration: 1.4);
+        // Screen shake scales with tier
+        _shake = math.max(
+          _shake,
+          switch (tier) { 0 => 0.0, 1 => 0.18, _ => 0.45 },
+        );
+        final pool = tier == 2
+            ? _painLinesByPersonality[n.personality] ??
+                _painLinesByPersonality[NpcPersonality.browser]!
+            : (kBumpLinesByPersonality[n.personality] ??
+                kBumpLinesByPersonality[NpcPersonality.browser]!);
+        _npcSay(n, pool, duration: tier == 2 ? 2.2 : 1.4);
         // Caught a fleeing thief with a stolen item — recover it.
         if (n.state == NpcState.fleeing && n.stolenItem != null) {
           final item = n.stolenItem!;
@@ -819,6 +880,11 @@ class GroceryDashGame extends FlameGame {
   void render(Canvas canvas) {
     super.render(canvas);
     if (!_worldReady) return;
+    final applyShake = _shake > 0;
+    if (applyShake) {
+      canvas.save();
+      canvas.translate(_shakeX, _shakeY);
+    }
     switch (cameraMode.value) {
       case CameraMode.topDown:
         _top.renderShoppingTrip(canvas, storeWorld, player, cart, cartDef);
@@ -845,6 +911,7 @@ class GroceryDashGame extends FlameGame {
           canvas, storeWorld, player, cart, cartDef, _focusedSlot,
         );
     }
+    if (applyShake) canvas.restore();
   }
 
   // ==================== run end ====================

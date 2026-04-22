@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../data/carts.dart';
 import '../data/items.dart';
 import '../data/obstacles.dart';
-import 'obstacle_sprites.dart';
 import 'product_sprites.dart';
 
 /// Bakes every billboard-worthy object in the world into a `ui.Image` once
@@ -136,21 +135,297 @@ class SpriteAtlas {
   }
 
   // ----- renderers -----
+  /// Front-facing NPC for the first-person billboard view. Shaded with a
+  /// vertical gradient on the torso, a rim highlight on one side, and a
+  /// soft drop shadow at the feet for grounding. Styled per obstacle id —
+  /// shoppers get a coat, kids are smaller, stockers have an apron, and
+  /// runaway carts render as a mini cart silhouette.
   static Future<ui.Image> _renderNpc(ObstacleDef def) async {
     const w = 96;
-    const h = 128;
+    const h = 160;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    // Draw the existing top-down sprite anchored at the bottom of the
-    // canvas so its "feet" sit on the billboard baseline.
-    ObstacleSprites.draw(
-      canvas,
-      def,
-      Offset(w / 2, h.toDouble() - 8),
-      h * 0.85,
-      phase: 0,
-    );
+
+    if (def.id == 'cart') {
+      // Runaway cart — render a cart-from-front silhouette
+      _paintCartFront(canvas, w, h);
+    } else {
+      _paintHumanFront(canvas, w, h, def);
+    }
     return recorder.endRecording().toImage(w, h);
+  }
+
+  static void _paintHumanFront(
+      Canvas canvas, int w, int h, ObstacleDef def) {
+    final cx = w / 2.0;
+    final feetY = h - 12.0;
+
+    // Colour choice per NPC archetype
+    final (shirtColor, pantsColor, hairColor, skin, accent) = switch (def.id) {
+      'stocker' => (
+        const Color(0xFFD89F3B),
+        const Color(0xFF3D3D3D),
+        const Color(0xFF3A2916),
+        const Color(0xFFE0A678),
+        Colors.white,
+      ),
+      'kid' => (
+        const Color(0xFFE05B3F),
+        const Color(0xFF3D4A66),
+        const Color(0xFFE5A145),
+        const Color(0xFFF4C9A3),
+        Colors.transparent,
+      ),
+      _ => (
+        const Color(0xFF3D8AB0),
+        const Color(0xFF3D4A66),
+        const Color(0xFF3A2916),
+        const Color(0xFFF4C9A3),
+        Colors.transparent,
+      ),
+    };
+
+    final sizeMult = def.id == 'kid' ? 0.78 : 1.0;
+    // --- Drop shadow ---
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset(cx, feetY + 2), width: 46 * sizeMult, height: 10),
+      Paint()..color = Colors.black.withValues(alpha: 0.4),
+    );
+
+    // --- Legs ---
+    final legTop = feetY - 54 * sizeMult;
+    final legsPaint = Paint()..color = pantsColor;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(cx - 11 * sizeMult, legTop, 10 * sizeMult,
+            52 * sizeMult),
+        const Radius.circular(3),
+      ),
+      legsPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(cx + 1 * sizeMult, legTop, 10 * sizeMult,
+            52 * sizeMult),
+        const Radius.circular(3),
+      ),
+      legsPaint,
+    );
+
+    // --- Shoes ---
+    final shoesPaint = Paint()..color = const Color(0xFF2A2A3A);
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset(cx - 6 * sizeMult, feetY),
+          width: 14 * sizeMult,
+          height: 7),
+      shoesPaint,
+    );
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset(cx + 6 * sizeMult, feetY),
+          width: 14 * sizeMult,
+          height: 7),
+      shoesPaint,
+    );
+
+    // --- Torso with vertical gradient ---
+    final torsoTop = legTop - 52 * sizeMult;
+    final torsoW = 40 * sizeMult;
+    final torsoRect = Rect.fromLTWH(
+      cx - torsoW / 2,
+      torsoTop,
+      torsoW,
+      52 * sizeMult,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(torsoRect, const Radius.circular(8)),
+      Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            Color.lerp(shirtColor, Colors.white, 0.12)!,
+            shirtColor,
+            Color.lerp(shirtColor, Colors.black, 0.25)!,
+          ],
+        ).createShader(torsoRect),
+    );
+    // Rim highlight — left side lighter
+    canvas.drawRect(
+      Rect.fromLTWH(
+          torsoRect.left + 2, torsoRect.top + 4, 3, torsoRect.height - 8),
+      Paint()..color = Colors.white.withValues(alpha: 0.3),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(torsoRect, const Radius.circular(8)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+
+    // Apron for stocker
+    if (accent != Colors.transparent) {
+      final apronRect = Rect.fromLTWH(
+        torsoRect.left + 4,
+        torsoRect.top + torsoRect.height * 0.35,
+        torsoRect.width - 8,
+        torsoRect.height * 0.65,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(apronRect, const Radius.circular(4)),
+        Paint()..color = accent,
+      );
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(apronRect, const Radius.circular(4)),
+        Paint()
+          ..color = Colors.black.withValues(alpha: 0.35)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+
+    // --- Arms ---
+    final armPaint = Paint()..color = skin;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(torsoRect.left - 8 * sizeMult, torsoRect.top + 4,
+            8 * sizeMult, 40 * sizeMult),
+        const Radius.circular(4),
+      ),
+      armPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(torsoRect.right, torsoRect.top + 4, 8 * sizeMult,
+            40 * sizeMult),
+        const Radius.circular(4),
+      ),
+      armPaint,
+    );
+
+    // --- Head ---
+    final headR = 16 * sizeMult;
+    final headC = Offset(cx, torsoTop - headR + 2);
+    // Neck
+    canvas.drawRect(
+      Rect.fromCenter(
+          center: Offset(cx, torsoTop - 2),
+          width: 10 * sizeMult,
+          height: 6),
+      Paint()..color = Color.lerp(skin, Colors.black, 0.15)!,
+    );
+    // Head with sphere-ish gradient
+    canvas.drawCircle(
+      headC,
+      headR,
+      Paint()
+        ..shader = RadialGradient(
+          center: const Alignment(-0.35, -0.35),
+          radius: 1.0,
+          colors: [
+            Color.lerp(skin, Colors.white, 0.15)!,
+            skin,
+            Color.lerp(skin, Colors.black, 0.25)!,
+          ],
+        ).createShader(
+          Rect.fromCircle(center: headC, radius: headR),
+        ),
+    );
+    canvas.drawCircle(
+      headC,
+      headR,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.6)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    // Hair — arc over the top of the head
+    canvas.save();
+    final hairRect = Rect.fromCircle(center: headC, radius: headR);
+    canvas.clipRect(Rect.fromLTWH(
+      hairRect.left,
+      hairRect.top,
+      hairRect.width,
+      hairRect.height * 0.55,
+    ));
+    canvas.drawCircle(
+      headC,
+      headR,
+      Paint()..color = hairColor,
+    );
+    canvas.restore();
+    // Eyes
+    final eyePaint = Paint()..color = Colors.black;
+    canvas.drawCircle(headC.translate(-headR * 0.35, -headR * 0.05),
+        headR * 0.1, eyePaint);
+    canvas.drawCircle(headC.translate(headR * 0.35, -headR * 0.05),
+        headR * 0.1, eyePaint);
+    // Mouth
+    canvas.drawLine(
+      headC.translate(-headR * 0.25, headR * 0.35),
+      headC.translate(headR * 0.25, headR * 0.35),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.6)
+        ..strokeWidth = 1.5,
+    );
+  }
+
+  static void _paintCartFront(Canvas canvas, int w, int h) {
+    final cx = w / 2.0;
+    final bottomY = h - 20.0;
+    // Shadow
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset(cx, bottomY + 6), width: 72, height: 12),
+      Paint()..color = Colors.black.withValues(alpha: 0.4),
+    );
+    // Body
+    final body = Rect.fromCenter(
+      center: Offset(cx, bottomY - 26),
+      width: 60,
+      height: 44,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(body, const Radius.circular(8)),
+      Paint()
+        ..shader = const LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFD9D9E0), Color(0xFF7C7C85)],
+        ).createShader(body),
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(body, const Radius.circular(8)),
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.7)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
+    );
+    // Wire mesh
+    final mesh = Paint()
+      ..color = Colors.black.withValues(alpha: 0.3)
+      ..strokeWidth = 1;
+    for (var i = 1; i < 5; i++) {
+      final t = i / 5;
+      canvas.drawLine(
+        Offset(body.left + body.width * t, body.top + 3),
+        Offset(body.left + body.width * t, body.bottom - 3),
+        mesh,
+      );
+    }
+    // Handle bar
+    canvas.drawRect(
+      Rect.fromLTWH(body.left - 4, body.top - 8, body.width + 8, 6),
+      Paint()..color = const Color(0xFFE05B3F),
+    );
+    // Wheels (peek)
+    canvas.drawCircle(Offset(body.left + 8, body.bottom + 4), 6,
+        Paint()..color = Colors.black);
+    canvas.drawCircle(Offset(body.right - 8, body.bottom + 4), 6,
+        Paint()..color = Colors.black);
   }
 
   static Future<ui.Image> _renderItem(ItemDef def) async {

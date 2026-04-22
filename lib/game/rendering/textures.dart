@@ -115,45 +115,50 @@ class TextureAtlas {
 
   Future<ui.Image> _buildShelf(SectionDef section) async {
     return _render((canvas, size) {
-      // Base backboard in the section's muted wall tone
-      canvas.drawRect(Rect.fromLTWH(0, 0, size, size),
-          Paint()..color = section.wallColor);
-      // Three shelf rows with coloured product blocks
+      // Empty metal shelving backboard — actual products render as 3D
+      // billboards in front of the wall, so the texture just provides
+      // the shelf chassis.
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size, size),
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color.lerp(section.wallColor, Colors.white, 0.1)!,
+              section.wallColor,
+              Color.lerp(section.wallColor, Colors.black, 0.2)!,
+            ],
+          ).createShader(Rect.fromLTWH(0, 0, size, size)),
+      );
+      // Thick horizontal planks at 3 heights (the parts of the shelf that
+      // actually protrude into the aisle).
       const rows = 3;
       final rowH = size / rows;
-      final plank = Paint()..color = const Color(0xFF6E5A3C);
-      final rng = math.Random(section.id.hashCode);
-      final palette = [
-        section.accentColor,
-        const Color(0xFFE55A45),
-        const Color(0xFF4AA3DF),
-        const Color(0xFFE5B04A),
-        const Color(0xFF4CAF7A),
-        const Color(0xFFB04A7C),
-      ];
+      final plank = Paint()..color = const Color(0xFF5A4A34);
+      final plankHi = Paint()..color = const Color(0xFF8A7254);
       for (var r = 0; r < rows; r++) {
-        final y = r * rowH;
-        // Plank
-        canvas.drawRect(
-            Rect.fromLTWH(0, y + rowH - 4, size, 3), plank);
-        // Product blocks
-        var x = 2.0;
-        while (x < size - 4) {
-          final w = 6 + rng.nextInt(6).toDouble();
-          final h = (rowH - 8) * (0.55 + rng.nextDouble() * 0.4);
-          final col = palette[rng.nextInt(palette.length)];
-          final rect = Rect.fromLTWH(
-              x, y + rowH - 4 - h, w, h);
-          canvas.drawRect(rect, Paint()..color = col);
-          canvas.drawRect(
-              rect,
-              Paint()
-                ..color = Colors.black.withValues(alpha: 0.3)
-                ..style = PaintingStyle.stroke
-                ..strokeWidth = 0.6);
-          x += w + 1.5;
-        }
+        final y = (r + 1) * rowH - 5;
+        canvas.drawRect(Rect.fromLTWH(0, y, size, 5), plank);
+        canvas.drawRect(Rect.fromLTWH(0, y, size, 1.5), plankHi);
       }
+      // Vertical upright rails to sell it as shelving
+      final rail = Paint()..color = const Color(0xFF4A4040);
+      canvas.drawRect(Rect.fromLTWH(2, 0, 3, size), rail);
+      canvas.drawRect(Rect.fromLTWH(size - 5, 0, 3, size), rail);
+      // Subtle corner shading for ambient occlusion
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size, size),
+        Paint()
+          ..shader = RadialGradient(
+            radius: 0.9,
+            colors: [
+              Colors.transparent,
+              Colors.black.withValues(alpha: 0.25),
+            ],
+            stops: const [0.7, 1.0],
+          ).createShader(Rect.fromLTWH(0, 0, size, size)),
+      );
     });
   }
 

@@ -52,6 +52,19 @@ class ProductSprites {
   static Paint _fill(Color c, double opacity) =>
       Paint()..color = c.withValues(alpha: c.a * opacity);
 
+  /// Vertical gradient fill — lighter at top, darker at bottom — giving
+  /// each product a subtle 3D volume.
+  static Paint _gradFill(Rect rect, Color c, double opacity) => Paint()
+    ..shader = LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [
+        Color.lerp(c, Colors.white, 0.22)!.withValues(alpha: opacity),
+        c.withValues(alpha: opacity),
+        Color.lerp(c, Colors.black, 0.28)!.withValues(alpha: opacity),
+      ],
+    ).createShader(rect);
+
   static Paint _outline(double opacity) => Paint()
     ..color = Colors.black.withValues(alpha: 0.7 * opacity)
     ..style = PaintingStyle.stroke
@@ -60,6 +73,25 @@ class ProductSprites {
 
   static Paint _highlight(double opacity) => Paint()
     ..color = Colors.white.withValues(alpha: 0.32 * opacity);
+
+  /// Small ellipse shadow drawn under the product to ground it on a shelf.
+  static void _groundShadow(
+      Canvas canvas, Offset base, double width, double opacity) {
+    canvas.drawOval(
+      Rect.fromCenter(
+          center: Offset(base.dx, base.dy + 2), width: width, height: 6),
+      Paint()..color = Colors.black.withValues(alpha: 0.32 * opacity),
+    );
+  }
+
+  /// Narrow bright streak on the left edge of a body rect — reads as a
+  /// light rim from above/left.
+  static void _rimLight(Canvas canvas, Rect rect, double opacity) {
+    canvas.drawRect(
+      Rect.fromLTWH(rect.left + 2, rect.top + 3, 2.5, rect.height - 6),
+      Paint()..color = Colors.white.withValues(alpha: 0.35 * opacity),
+    );
+  }
 
   /// Standard label strip with the item emoji. Used on most shapes.
   static void _label(
@@ -90,6 +122,7 @@ class ProductSprites {
   // ----- shape implementations -----
   static void _bottle(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.5, op);
     final bodyW = h * 0.45;
     final bodyH = h * 0.75;
     final neckW = h * 0.18;
@@ -112,10 +145,11 @@ class ProductSprites {
     // body
     canvas.drawRRect(
       RRect.fromRectAndRadius(bodyRect, Radius.circular(h * 0.08)),
-      _fill(def.color, op),
+      _gradFill(bodyRect, def.color, op),
     );
+    _rimLight(canvas, bodyRect, op);
     // neck
-    canvas.drawRect(neckRect, _fill(def.color, op));
+    canvas.drawRect(neckRect, _gradFill(neckRect, def.color, op));
     // cap
     canvas.drawRRect(
       RRect.fromRectAndRadius(capRect, Radius.circular(h * 0.02)),
@@ -148,10 +182,12 @@ class ProductSprites {
 
   static void _carton(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.6, op);
     final w = h * 0.55;
     final bodyH = h * 0.78;
     final body = Rect.fromLTWH(base.dx - w / 2, base.dy - bodyH, w, bodyH);
-    canvas.drawRect(body, _fill(def.color, op));
+    canvas.drawRect(body, _gradFill(body, def.color, op));
+    _rimLight(canvas, body, op);
     // Slanted top (carton fold)
     final topY = body.top;
     final foldY = topY - h * 0.18;
@@ -183,14 +219,16 @@ class ProductSprites {
 
   static void _can(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.55, op);
     final w = h * 0.52;
     final bodyH = h * 0.72;
     final body = Rect.fromLTWH(base.dx - w / 2, base.dy - bodyH, w, bodyH);
     // Side rim
     canvas.drawRRect(
       RRect.fromRectAndRadius(body, Radius.circular(h * 0.06)),
-      _fill(def.color, op),
+      _gradFill(body, def.color, op),
     );
+    _rimLight(canvas, body, op);
     canvas.drawRRect(
       RRect.fromRectAndRadius(body, Radius.circular(h * 0.06)),
       _outline(op),
@@ -214,10 +252,12 @@ class ProductSprites {
 
   static void _box(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.75, op);
     final w = h * 0.72;
     final bodyH = h * 0.82;
     final body = Rect.fromLTWH(base.dx - w / 2, base.dy - bodyH, w, bodyH);
-    canvas.drawRect(body, _fill(def.color, op));
+    canvas.drawRect(body, _gradFill(body, def.color, op));
+    _rimLight(canvas, body, op);
     // top flap (darker)
     canvas.drawRect(
       Rect.fromLTWH(body.left, body.top, w, h * 0.10),
@@ -235,6 +275,7 @@ class ProductSprites {
 
   static void _bag(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.7, op);
     final w = h * 0.70;
     final bodyH = h * 0.78;
     // Puffy rounded body
@@ -245,8 +286,9 @@ class ProductSprites {
     );
     canvas.drawRRect(
       RRect.fromRectAndRadius(bodyRect, Radius.circular(h * 0.20)),
-      _fill(def.color, op),
+      _gradFill(bodyRect, def.color, op),
     );
+    _rimLight(canvas, bodyRect, op);
     canvas.drawRRect(
       RRect.fromRectAndRadius(bodyRect, Radius.circular(h * 0.20)),
       _outline(op),
@@ -275,6 +317,7 @@ class ProductSprites {
 
   static void _tray(Canvas canvas, ItemDef def, Offset base, double h,
       double op) {
+    _groundShadow(canvas, base, h * 0.8, op);
     final w = h * 0.90;
     final bodyH = h * 0.45;
     final tray = Rect.fromCenter(

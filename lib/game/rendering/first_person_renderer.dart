@@ -120,6 +120,9 @@ class FirstPersonRenderer {
       _drawColumn(canvas, i, columns, w, h, horizon, hit, rayAngle, facing);
     }
 
+    // --- Ceiling lights (hung above the horizon) ---
+    _drawCeilingLights(canvas, world, camX, camY, facing, w, horizon);
+
     // --- Ceiling aisle signs ---
     _drawAisleSigns(canvas, world, camX, camY, facing, w, horizon);
 
@@ -148,9 +151,25 @@ class FirstPersonRenderer {
     _drawCrosshair(canvas, w, horizon, focusedSlot != null);
   }
 
-  /// Atmospheric overlay based on the current section. Frozen aisle: pale
-  /// blue wash + soft ice particles drifting across the lower half.
+  /// Atmospheric overlay based on the current section. Each section gets
+  /// a subtle colour wash so crossing into a new zone feels like crossing
+  /// into a different space; Frozen gets an extra mist-particle pass.
   void _drawSectionWeather(Canvas canvas, double w, double h) {
+    // Subtle per-section wash so transitions feel distinct.
+    final washColor = switch (currentSectionId) {
+      'produce' => const Color(0xFF4AA35A).withValues(alpha: 0.06),
+      'bakery' => const Color(0xFFE8B04A).withValues(alpha: 0.08),
+      'deli' => const Color(0xFFC9A263).withValues(alpha: 0.06),
+      'dairy' => const Color(0xFFB0D0DC).withValues(alpha: 0.08),
+      'snacks' => const Color(0xFFE55A45).withValues(alpha: 0.06),
+      'household' => const Color(0xFF8A7E60).withValues(alpha: 0.06),
+      _ => null,
+    };
+    if (washColor != null) {
+      canvas.drawRect(
+          Rect.fromLTWH(0, 0, w, h), Paint()..color = washColor);
+    }
+
     if (currentSectionId == 'frozen') {
       // Blue wash with stronger effect toward the top
       canvas.drawRect(
@@ -170,7 +189,8 @@ class FirstPersonRenderer {
       final mist = Paint()..color = Colors.white.withValues(alpha: 0.35);
       for (var i = 0; i < 14; i++) {
         final t = (i * 71) % 100 / 100.0;
-        final drift = (DateTime.now().millisecondsSinceEpoch / 7000 + i) % 1.0;
+        final drift =
+            (DateTime.now().millisecondsSinceEpoch / 7000 + i) % 1.0;
         final x = (t * 1.3 + drift) % 1.0;
         final y = 0.25 + ((i * 37) % 100) / 140.0;
         canvas.drawCircle(
@@ -347,6 +367,82 @@ class FirstPersonRenderer {
     canvas.drawImageRect(tex, src, dst, paint);
   }
 
+  // ----- ceiling lights -----
+  /// Warm recessed-light billboards hung above the horizon. Positioned at
+  /// a 240-unit grid across the store so a few are always visible ahead.
+  void _drawCeilingLights(
+    Canvas canvas,
+    StoreWorld world,
+    double camX,
+    double camY,
+    double facing,
+    double w,
+    double horizon,
+  ) {
+    final cosA = math.cos(-facing);
+    final sinA = math.sin(-facing);
+    final focal = (w / 2) / math.tan(_fov / 2);
+    // Positioned at 240-unit grid — a handful are always near the camera.
+    final cellX = (camX / 240).round();
+    final cellY = (camY / 240).round();
+    final worldW = world.layout.size.width;
+    final worldH = world.layout.size.height;
+    for (var gy = cellY - 4; gy <= cellY + 6; gy++) {
+      for (var gx = cellX - 3; gx <= cellX + 3; gx++) {
+        final wx = gx * 240.0 + 120;
+        final wy = gy * 240.0 + 120;
+        if (wx < 0 || wx > worldW || wy < 0 || wy > worldH) continue;
+        final dx = wx - camX;
+        final dy = wy - camY;
+        final rx = dx * cosA - dy * sinA;
+        final ry = dx * sinA + dy * cosA;
+        if (rx <= 1) continue;
+
+        final screenX = w / 2 + (ry * focal) / rx;
+        if (screenX < -80 || screenX > w + 80) continue;
+        const ceilingHeight = 220.0;
+        final lightY = horizon - (ceilingHeight * focal) / rx;
+        final size = (100 * focal) / rx;
+        if (size < 4 || size > 180) continue;
+
+        // Light fixture — long rectangle with bright centre
+        final rect = Rect.fromCenter(
+          center: Offset(screenX, lightY),
+          width: size,
+          height: math.max(3, size * 0.14),
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(rect, Radius.circular(rect.height)),
+          Paint()
+            ..shader = RadialGradient(
+              colors: [
+                const Color(0xFFFFF2C8),
+                const Color(0xFFEFE3B4),
+              ],
+            ).createShader(rect),
+        );
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(rect, Radius.circular(rect.height)),
+          Paint()
+            ..color = Colors.black.withValues(alpha: 0.35)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1,
+        );
+        // Soft glow ring underneath
+        canvas.drawOval(
+          Rect.fromCenter(
+            center: Offset(screenX, lightY + rect.height),
+            width: rect.width * 1.3,
+            height: rect.height * 3,
+          ),
+          Paint()
+            ..color = const Color(0xFFFFF2C8).withValues(alpha: 0.28)
+            ..maskFilter = MaskFilter.blur(BlurStyle.normal, rect.height),
+        );
+      }
+    }
+  }
+
   // ----- aisle signs (ceiling-hung, always-visible) -----
   void _drawAisleSigns(
     Canvas canvas,
@@ -472,7 +568,7 @@ class FirstPersonRenderer {
         y: n.y,
         image: sprites.npc(n.def.id),
         worldSize: sprites.worldSizeFor('npc_${n.def.id}'),
-        groundAnchor: 1.0,
+        floorOffset: 0,
       ));
       // Fleeing thieves hold their stolen item overhead — shown as a
       // smaller floating billboard. Makes recovery targeting legible.
@@ -482,7 +578,7 @@ class FirstPersonRenderer {
           y: n.y,
           image: sprites.item(n.stolenItem!.id),
           worldSize: sprites.worldSizeFor('item_${n.stolenItem!.id}') * 0.9,
-          groundAnchor: -0.2, // floats above head
+          floorOffset: 150, // above head
           tint: const Color(0x66E05B3F),
         ));
       }
@@ -496,7 +592,7 @@ class FirstPersonRenderer {
         y: p.y,
         image: sprites.pallet(),
         worldSize: sprites.worldSizeFor('pallet'),
-        groundAnchor: 1.0,
+        floorOffset: 0,
       ));
     }
 
@@ -507,7 +603,7 @@ class FirstPersonRenderer {
         y: cart.y,
         image: sprites.parkedCart(cartDef.id),
         worldSize: sprites.worldSizeFor('cart_${cartDef.id}'),
-        groundAnchor: 1.0,
+        floorOffset: 0,
       ));
     }
 
@@ -521,16 +617,18 @@ class FirstPersonRenderer {
       final dy = slot.position.dy - camY;
       if (dx * dx + dy * dy > maxDist2) continue;
       final isFocused = identical(slot, focused);
+      // Produce bins have facing == 0 (items on top of ~70-tall bin).
+      // Regular shelves have facing == -1 / +1; items sit at ~95 (mid-
+      // shelf chest height on a 160-tall shelving unit).
+      final double itemFloorOffset = slot.facing == 0 ? 62 : 95;
       candidates.add(_Billboard(
         x: slot.position.dx,
         y: slot.position.dy,
         image: sprites.item(slot.item.id),
-        // Focused slot stays at full display size for readability; others
-        // render slightly smaller so they don't dominate the shelf face.
         worldSize: isFocused
             ? sprites.worldSizeFor('item_${slot.item.id}')
             : sprites.worldSizeFor('item_${slot.item.id}') * 0.78,
-        groundAnchor: 0.55, // floats at shelf mid-height
+        floorOffset: itemFloorOffset,
         tint: isFocused ? const Color(0x33FFD166) : null,
         opacity: _opacityForStock(slot.stock),
       ));
@@ -560,11 +658,12 @@ class FirstPersonRenderer {
       final screenSize = (b.worldSize * focal) / rx;
       if (screenSize < 2) continue;
 
-      // Billboard base sits on the ground plane at this depth.
-      final baseY = horizon + (cameraHeight * focal) / rx;
-      // Ground anchor = 1.0 means full-height sprite standing on baseY;
-      // 0.55 means mid-shelf floater (shifted up).
-      final topY = baseY - screenSize * b.groundAnchor - screenSize * (1 - b.groundAnchor) * 0.5;
+      // Billboard base sits on the ground plane at this depth. If the
+      // billboard has a floorOffset, shift its bottom up by that many
+      // world units (projected through the perspective).
+      final floorY = horizon + (cameraHeight * focal) / rx;
+      final bottomY = floorY - (b.floorOffset * focal) / rx;
+      final topY = bottomY - screenSize;
       final leftX = screenX - screenSize / 2;
 
       final cols = (w / _pixelStep).ceil();
@@ -600,7 +699,7 @@ class FirstPersonRenderer {
       // Grab highlight halo (under the focused item)
       if (b.tint != null) {
         canvas.drawCircle(
-          Offset(screenX, baseY - screenSize * 0.3),
+          Offset(screenX, bottomY - screenSize * 0.3),
           screenSize * 0.55,
           Paint()
             ..color = const Color(0xFFE05B3F).withValues(alpha: 0.18)
@@ -831,7 +930,7 @@ class _Billboard {
     required this.y,
     required this.image,
     required this.worldSize,
-    this.groundAnchor = 1.0,
+    this.floorOffset = 0,
     this.tint,
     this.opacity = 1.0,
   });
@@ -839,10 +938,10 @@ class _Billboard {
   final double y;
   final ui.Image image;
   final double worldSize;
-  /// Anchor point along the sprite's height where the ground is assumed to
-  /// be. 1.0 = feet on the ground, 0.5 = centred (floating), 0.0 = anchored
-  /// by top.
-  final double groundAnchor;
+  /// Height in world units above the floor where the sprite's BOTTOM edge
+  /// sits. 0 = feet on the floor (NPCs, pallets). 95 = mid-shelf height
+  /// (a product sitting on a shelf). 140 = above-head (stolen item).
+  final double floorOffset;
   final Color? tint;
   final double opacity;
   double relX = 0;
