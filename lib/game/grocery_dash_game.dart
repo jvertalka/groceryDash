@@ -8,8 +8,10 @@ import 'data/carts.dart';
 import 'data/items.dart';
 import 'data/modes.dart';
 import 'entities.dart';
+import 'audio.dart';
 import 'rendering/first_person_renderer.dart';
 import 'rendering/follow_cam_renderer.dart';
+import 'rendering/sprite_atlas.dart';
 import 'rendering/textures.dart';
 import 'rendering/top_down_renderer.dart';
 import 'run_result.dart';
@@ -47,6 +49,9 @@ class GroceryDashGame extends FlameGame {
   final ValueNotifier<InteractPrompt?> promptNotifier = ValueNotifier(null);
   final ValueNotifier<double> reachProgressNotifier = ValueNotifier(0);
   final ValueNotifier<double> checkoutProgressNotifier = ValueNotifier(0);
+  /// Fires with the focused slot id (or null) whenever the shelf face the
+  /// player is near changes — so the HUD shelf panel can rebuild.
+  final ValueNotifier<int> shelfFaceTickNotifier = ValueNotifier(0);
 
   // World + entities — eagerly initialised with placeholders so the HUD
   // (which may build before onLoad completes) can read them safely.
@@ -79,11 +84,52 @@ class GroceryDashGame extends FlameGame {
   static const double _cartMaxSpeed = 220;          // when pushing cart
   static const double _cartAccel = 900;             // px/s^2
   static const double _cartFriction = 5.0;          // velocity decay when idle
+  static const double _cartBrakeFriction = 14.0;    // extra decay when braking
   static const double _playerRadius = 14;
   static const double _cartRadius = 22;
 
+  // Cart visual polish state
+  double _cartDisplayHeading = 0;  // lags behind actual heading
+  double _cartPitch = 0;           // +ve = accel push, -ve = brake lean
+  bool _isBraking = false;
+
   // Slot interaction
   ShelfSlot? _focusedSlot;
+
+  /// All slots on the same shelf face as the currently focused slot. Used
+  /// by the HUD shelf-face selector. Groups by matching `facing` sign and
+  /// a tight axial distance along the shelf's long edge.
+  List<ShelfSlot> shelfFaceSlots() {
+    final focus = _focusedSlot;
+    if (focus == null) return const [];
+    final along = focus.facing == 0
+        ? 0 // top slots — treat as same face by proximity
+        : focus.facing;
+    final out = <ShelfSlot>[];
+    for (final s in storeWorld.shelfIndex.slots) {
+      if (s.empty) continue;
+      if (s.facing != along) continue;
+      // For vertical shelves (east/west), match x within 1 cell; group by y.
+      if (along != 0 &&
+          (s.position.dx - focus.position.dx).abs() < 60 &&
+          (s.position.dy - focus.position.dy).abs() < 240) {
+        out.add(s);
+      } else if (along == 0 &&
+          (s.position.dy - focus.position.dy).abs() < 60 &&
+          (s.position.dx - focus.position.dx).abs() < 180) {
+        out.add(s);
+      }
+    }
+    return out;
+  }
+
+  /// Manually set the focused slot (used by the shelf-face selector tapping
+  /// a specific item in the panel).
+  void setFocusedSlot(ShelfSlot? slot) {
+    _focusedSlot = slot;
+  }
+
+  ShelfSlot? get focusedSlot => _focusedSlot;
 
   @override
   Future<void> onLoad() async {
@@ -100,11 +146,15 @@ class GroceryDashGame extends FlameGame {
     cart.heading = -math.pi / 2;
     _follow.viewport = Size(size.x, size.y);
     _top.viewport = Size(size.x, size.y);
-    // Build texture atlas and first-person renderer async
-    TextureAtlas.build().then((atlas) {
+    // Build both atlases in parallel, then wire up the first-person
+    // renderer once they're ready.
+    Future.wait([TextureAtlas.build(), SpriteAtlas.build()]).then((pair) {
+      final textures = pair[0] as TextureAtlas;
+      final sprites = pair[1] as SpriteAtlas;
       _fpv = FirstPersonRenderer(
         viewport: Size(size.x, size.y),
-        atlas: atlas,
+        atlas: textures,
+        sprites: sprites,
       );
     });
 
@@ -155,6 +205,7 @@ class GroceryDashGame extends FlameGame {
       cart.vy = 0;
       player.mode = PlayerMode.onFoot;
       cartParkedNotifier.value = true;
+      GameAudio.instance.parkClunk();
       _setBanner('Cart parked. Mind the aisle — and your stuff.');
     } else {
       // Only re-attach if player is next to the cart
@@ -239,6 +290,18 @@ class GroceryDashGame extends FlameGame {
         : math.sqrt(player.vx * player.vx + player.vy * player.vy);
     _fpv?.updateHeadBob(dt, bobSpeed);
 
+    // Push visual polish values to the FPV renderer
+    if (_fpv != null) {
+      _fpv!.cartDisplayHeading = _cartDisplayHeading;
+      _fpv!.cartPitchOffset = _cartPitch;
+    }
+
+    // Footstep audio on foot
+    if (player.mode == PlayerMode.onFoot && bobSpeed > 60) {
+      GameAudio.instance.footstep(
+          intensity: (bobSpeed / _playerWalkSpeed).clamp(0.2, 1.0));
+    }
+
     storeWorld.tick(
       dt,
       playerX: player.x,
@@ -256,7 +319,11 @@ class GroceryDashGame extends FlameGame {
     // Find the closest shelf slot to wherever the player is standing.
     // Only non-empty slots within 60 pixels count.
     final found = storeWorld.shelfIndex.nearest(player.x, player.y, within: 60);
+    final changed = !identical(found, _focusedSlot);
     _focusedSlot = found;
+    if (changed) {
+      shelfFaceTickNotifier.value = shelfFaceTickNotifier.value + 1;
+    }
 
     // Build prompt notification
     if (player.mode == PlayerMode.checkout ||
@@ -285,24 +352,48 @@ class GroceryDashGame extends FlameGame {
     final mag = joystick.distance.clamp(0.0, 1.0);
 
     if (firstPerson) {
-      // Tank controls: X = turn rate, Y (inverted, up = forward) = accelerate
+      // Tank controls: X = turn rate, Y (inverted, up = forward) = accel
       // along current heading.
       final turn = joystick.dx;
       const turnRate = 2.6; // rad/s at full stick
       cart.heading += turn * turnRate * dt;
       player.facing = cart.heading;
       final forwardAmount = -joystick.dy; // stick up is forward
+
+      // Brake detection: commanded direction vs current velocity
+      final vSpeed = math.sqrt(cart.vx * cart.vx + cart.vy * cart.vy);
+      final forwardUnitX = math.cos(cart.heading);
+      final forwardUnitY = math.sin(cart.heading);
+      final vDotForward = cart.vx * forwardUnitX + cart.vy * forwardUnitY;
+      _isBraking = vSpeed > 20 && forwardAmount < -0.2 && vDotForward > 0;
+
       if (mag > 0.08) {
-        final ax = math.cos(cart.heading) * forwardAmount * _cartAccel;
-        final ay = math.sin(cart.heading) * forwardAmount * _cartAccel;
+        final ax = forwardUnitX * forwardAmount * _cartAccel;
+        final ay = forwardUnitY * forwardAmount * _cartAccel;
         cart.vx += ax * dt;
         cart.vy += ay * dt;
+        if (_isBraking) {
+          // Extra deceleration while actively holding the stick against
+          // motion — turns the back-press into a real brake.
+          cart.vx -= cart.vx * math.min(1.0, _cartBrakeFriction * dt);
+          cart.vy -= cart.vy * math.min(1.0, _cartBrakeFriction * dt);
+        }
+        // Sound: wheel squeak while pushing
+        GameAudio.instance.wheelSqueak(speed: vSpeed);
       } else {
         cart.vx -= cart.vx * math.min(1.0, _cartFriction * dt);
         cart.vy -= cart.vy * math.min(1.0, _cartFriction * dt);
         if (cart.vx.abs() < 1) cart.vx = 0;
         if (cart.vy.abs() < 1) cart.vy = 0;
       }
+
+      // Visual polish: display heading lags a beat behind actual
+      _cartDisplayHeading =
+          _lerpAngle(_cartDisplayHeading, cart.heading, dt * 7);
+      // Pitch: positive when accelerating forward, negative while braking
+      final targetPitch =
+          _isBraking ? -0.4 : (forwardAmount.clamp(-1.0, 1.0) * 0.25);
+      _cartPitch += (targetPitch - _cartPitch) * math.min(1.0, dt * 8);
     } else {
       // Analog top-down controls (follow cam / map)
       if (mag > 0.08) {
@@ -409,6 +500,7 @@ class GroceryDashGame extends FlameGame {
       slot.stock--;
       cart.addItem(slot.item);
       list.recount(cart);
+      GameAudio.instance.pickupChime();
       if (list.allComplete) {
         _setBanner('List complete. Head to checkout.');
       }
@@ -417,9 +509,14 @@ class GroceryDashGame extends FlameGame {
   }
 
   void _updateCheckoutScan(double dt) {
+    final before = player.checkoutTimer;
     player.checkoutTimer += dt;
     checkoutProgressNotifier.value =
         (player.checkoutTimer / Player.checkoutTotal).clamp(0.0, 1.0);
+    // One scanner beep roughly every 0.4s during the scan.
+    final beatsBefore = (before / 0.4).floor();
+    final beatsNow = (player.checkoutTimer / 0.4).floor();
+    if (beatsNow > beatsBefore) GameAudio.instance.scannerBeep();
     if (player.checkoutTimer >= Player.checkoutTotal) {
       _endRun(cleared: true);
     }
@@ -453,6 +550,7 @@ class GroceryDashGame extends FlameGame {
         n.stolenItem = item;
         list.recount(cart);
         _itemsStolenByNpcs++;
+        GameAudio.instance.thiefWarning();
         _setBanner('Someone took your ${item.name}!');
       }
     }
@@ -501,13 +599,30 @@ class GroceryDashGame extends FlameGame {
           n.state = NpcState.stunned;
           n.stateTimer = 0.4;
         }
-        // Slow the player/cart
+        // Slow the player/cart + nudge-slide along the tangent so we don't
+        // hard-stop on contact. Decomposes velocity into normal + tangent
+        // components and cancels the normal into the NPC.
         if (pushing) {
-          cart.vx *= 0.4;
-          cart.vy *= 0.4;
+          final vNorm = cart.vx * nx + cart.vy * ny;
+          if (vNorm > 0) {
+            cart.vx -= vNorm * nx * 0.7;
+            cart.vy -= vNorm * ny * 0.7;
+          }
+          cart.vx *= 0.75;
+          cart.vy *= 0.75;
+          GameAudio.instance.thud(
+              intensity: (math.sqrt(cart.vx * cart.vx + cart.vy * cart.vy) /
+                      _cartMaxSpeed)
+                  .clamp(0.3, 1.0));
         } else {
-          player.vx *= 0.3;
-          player.vy *= 0.3;
+          final vNorm = player.vx * nx + player.vy * ny;
+          if (vNorm > 0) {
+            player.vx -= vNorm * nx * 0.7;
+            player.vy -= vNorm * ny * 0.7;
+          }
+          player.vx *= 0.5;
+          player.vy *= 0.5;
+          GameAudio.instance.thud(intensity: 0.5);
         }
       }
     }
@@ -603,6 +718,7 @@ class GroceryDashGame extends FlameGame {
     promptNotifier.dispose();
     reachProgressNotifier.dispose();
     checkoutProgressNotifier.dispose();
+    shelfFaceTickNotifier.dispose();
     super.onRemove();
   }
 }

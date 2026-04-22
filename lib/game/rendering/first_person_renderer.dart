@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
@@ -7,6 +8,7 @@ import '../entities.dart';
 import '../world/grid_world.dart';
 import '../world/shelf.dart';
 import '../world/store_world.dart';
+import 'sprite_atlas.dart';
 import 'textures.dart';
 
 /// Result of casting a single ray. Captured so the floor-caster and sprite
@@ -34,9 +36,19 @@ class _RayHit {
 /// lighting model beyond that, sprites rendered as billboards (added in a
 /// later pass).
 class FirstPersonRenderer {
-  FirstPersonRenderer({required this.viewport, required this.atlas});
+  FirstPersonRenderer({
+    required this.viewport,
+    required this.atlas,
+    required this.sprites,
+  });
   Size viewport;
   TextureAtlas atlas;
+  SpriteAtlas sprites;
+
+  /// Visual lag for the cart — cart display heading trails player.facing.
+  /// Updated from the game class each frame.
+  double cartDisplayHeading = 0;
+  double cartPitchOffset = 0;   // +ve leans forward (accel), -ve back (brake)
 
   /// Horizontal FOV in radians. ~72° gives a comfortable "pushing a cart"
   /// feel without fish-eye.
@@ -94,6 +106,21 @@ class FirstPersonRenderer {
       if (hit.distance >= 1e9) continue;
       _drawColumn(canvas, i, columns, w, h, horizon, hit, rayAngle, facing);
     }
+
+    // --- Billboards (NPCs, parked cart, focused shelf item) ---
+    _drawSprites(
+      canvas,
+      world,
+      camX,
+      camY,
+      facing,
+      cart,
+      cartDef,
+      focusedSlot,
+      w,
+      h,
+      horizon,
+    );
 
     // --- Foreground: cart pushed out ahead of the camera ---
     _drawForegroundCart(canvas, w, h, horizon, cartDef, cart, player);
@@ -270,6 +297,132 @@ class FirstPersonRenderer {
     canvas.drawImageRect(tex, src, dst, paint);
   }
 
+  // ----- sprite billboards -----
+  /// Collects every billboard-worthy entity in view, sorts by distance
+  /// descending, and draws each with per-column z-test against the wall
+  /// depth buffer.
+  void _drawSprites(
+    Canvas canvas,
+    StoreWorld world,
+    double camX,
+    double camY,
+    double facing,
+    Cart cart,
+    CartDef cartDef,
+    ShelfSlot? focused,
+    double w,
+    double h,
+    double horizon,
+  ) {
+    final candidates = <_Billboard>[];
+
+    // NPCs
+    for (final n in world.npcs) {
+      if (n.consumed) continue;
+      if (n.def.id == 'spill' || n.def.id == 'grapes') continue;
+      candidates.add(_Billboard(
+        x: n.x,
+        y: n.y,
+        image: sprites.npc(n.def.id),
+        worldSize: sprites.worldSizeFor('npc_${n.def.id}'),
+        groundAnchor: 1.0,
+      ));
+    }
+
+    // Parked cart
+    if (cart.state == CartState.parked) {
+      candidates.add(_Billboard(
+        x: cart.x,
+        y: cart.y,
+        image: sprites.parkedCart(cartDef.id),
+        worldSize: sprites.worldSizeFor('cart_${cartDef.id}'),
+        groundAnchor: 1.0,
+      ));
+    }
+
+    // Currently-focused shelf item (draws in front of the shelf wall so
+    // the player sees what they're about to grab).
+    if (focused != null && !focused.empty) {
+      candidates.add(_Billboard(
+        x: focused.position.dx,
+        y: focused.position.dy,
+        image: sprites.item(focused.item.id),
+        worldSize: sprites.worldSizeFor('item_${focused.item.id}'),
+        groundAnchor: 0.55, // floats at shelf mid-height
+        tint: const Color(0x33FFD166),
+      ));
+    }
+
+    if (candidates.isEmpty) return;
+
+    // Transform to camera space (+X = forward) so we can sort by depth
+    final cosA = math.cos(-facing);
+    final sinA = math.sin(-facing);
+    for (final b in candidates) {
+      final dx = b.x - camX;
+      final dy = b.y - camY;
+      b.relX = dx * cosA - dy * sinA;
+      b.relY = dx * sinA + dy * cosA;
+    }
+    candidates.removeWhere((b) => b.relX <= 1); // cull behind camera
+    candidates.sort((a, c) => c.relX.compareTo(a.relX));
+
+    final focal = (w / 2) / math.tan(_fov / 2);
+    const cameraHeight = 90.0;
+
+    for (final b in candidates) {
+      final rx = b.relX;
+      final ry = b.relY;
+      final screenX = w / 2 + (ry * focal) / rx;
+      final screenSize = (b.worldSize * focal) / rx;
+      if (screenSize < 2) continue;
+
+      // Billboard base sits on the ground plane at this depth.
+      final baseY = horizon + (cameraHeight * focal) / rx;
+      // Ground anchor = 1.0 means full-height sprite standing on baseY;
+      // 0.55 means mid-shelf floater (shifted up).
+      final topY = baseY - screenSize * b.groundAnchor - screenSize * (1 - b.groundAnchor) * 0.5;
+      final leftX = screenX - screenSize / 2;
+
+      final cols = (w / _pixelStep).ceil();
+      final firstCol = math.max(0, (leftX / _pixelStep).floor());
+      final lastCol = math.min(cols - 1, ((leftX + screenSize) / _pixelStep).ceil());
+      if (firstCol >= lastCol) continue;
+
+      final img = b.image;
+      final texW = img.width.toDouble();
+      final texH = img.height.toDouble();
+      final tintPaint = b.tint != null
+          ? (Paint()
+            ..colorFilter = ui.ColorFilter.mode(b.tint!, BlendMode.srcATop)
+            ..filterQuality = FilterQuality.none)
+          : (Paint()..filterQuality = FilterQuality.none);
+
+      for (var col = firstCol; col <= lastCol; col++) {
+        // Depth test vs wall buffer — skip if a wall is closer.
+        if (col < _zBuffer.length && rx >= _zBuffer[col]) continue;
+        final sx = col * _pixelStep;
+        final u = (sx - leftX) / screenSize;
+        if (u < 0 || u > 1) continue;
+        final texCol = (u * texW).floor().clamp(0, texW.toInt() - 1);
+        final src = Rect.fromLTWH(texCol.toDouble(), 0, 1, texH);
+        final dst = Rect.fromLTWH(sx, topY, _pixelStep + 0.5, screenSize);
+        canvas.drawImageRect(img, src, dst, tintPaint);
+      }
+
+      // Grab highlight halo (under the focused item)
+      if (b.tint != null) {
+        canvas.drawCircle(
+          Offset(screenX, baseY - screenSize * 0.3),
+          screenSize * 0.55,
+          Paint()
+            ..color = const Color(0xFFE05B3F).withValues(alpha: 0.18)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+        );
+      }
+    }
+  }
+
   // ----- foreground cart -----
   /// A simplified cart silhouette drawn in the bottom third, giving the
   /// "I'm pushing this" feel. Sways with head bob.
@@ -283,10 +436,17 @@ class FirstPersonRenderer {
     Player player,
   ) {
     if (cart.state == CartState.parked) return;
-    final sway = math.sin(_bobPhase * 2) * 6;
+    // Heading lag: when player turns, cart swings behind. Positive diff =
+    // player turned right, cart leans right relative to camera.
+    final headingDiff = _shortestAngle(cartDisplayHeading - player.facing);
+    // Positive pitch (acceleration) pushes the cart away from camera (smaller
+    // apparent), negative (brake) pulls it closer and downward.
+    final pitch = cartPitchOffset;
+    final sway = math.sin(_bobPhase * 2) * 4 + headingDiff * 80;
+    final pitchY = pitch * 12; // brake: cart drops in view; accel: cart lifts
     final cx = w / 2 + sway;
-    final basketTop = h * 0.72;
-    final basketBot = h + 20;
+    final basketTop = h * (0.72 - pitch * 0.015) + pitchY;
+    final basketBot = h + 20 + pitchY;
     final basketNear = w * 0.45;
     final basketFar = w * 0.28;
 
@@ -356,6 +516,13 @@ class FirstPersonRenderer {
     );
   }
 
+  double _shortestAngle(double d) {
+    var x = d % (2 * math.pi);
+    if (x > math.pi) x -= 2 * math.pi;
+    if (x < -math.pi) x += 2 * math.pi;
+    return x;
+  }
+
   void _drawCrosshair(Canvas canvas, double w, double horizon, bool active) {
     final cx = w / 2;
     final color = active
@@ -374,4 +541,28 @@ class FirstPersonRenderer {
     canvas.drawLine(
         Offset(cx, horizon + 2), Offset(cx, horizon + 6), paint);
   }
+}
+
+/// Scratch data for a single billboard under render. Mutable so we can
+/// write back the camera-space coords after the transform pass.
+class _Billboard {
+  _Billboard({
+    required this.x,
+    required this.y,
+    required this.image,
+    required this.worldSize,
+    this.groundAnchor = 1.0,
+    this.tint,
+  });
+  final double x;
+  final double y;
+  final ui.Image image;
+  final double worldSize;
+  /// Anchor point along the sprite's height where the ground is assumed to
+  /// be. 1.0 = feet on the ground, 0.5 = centred (floating), 0.0 = anchored
+  /// by top.
+  final double groundAnchor;
+  final Color? tint;
+  double relX = 0;
+  double relY = 0;
 }

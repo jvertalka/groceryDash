@@ -8,6 +8,7 @@ import '../game/data/modes.dart';
 import '../game/entities.dart';
 import '../game/grocery_dash_game.dart';
 import '../game/run_result.dart';
+import '../game/world/shelf.dart';
 import '../services/player_storage.dart';
 import '../ui/design.dart';
 import '../widgets/virtual_joystick.dart';
@@ -112,6 +113,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             ),
 
             _BottomRightActions(game: _game),
+
+            _ShelfFacePanel(game: _game),
 
             _BannerToast(notifier: _game.bannerNotifier),
           ],
@@ -592,6 +595,136 @@ class _BannerToast extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+// ============================================================
+//  Shelf-face selector — appears at the left side of the screen
+//  when the player is near a shelf. Lists the items visible on
+//  that face; tapping one focuses it (and the GRAB button will
+//  reach for it next).
+// ============================================================
+
+class _ShelfFacePanel extends StatelessWidget {
+  const _ShelfFacePanel({required this.game});
+  final GroceryDashGame game;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: game.shelfFaceTickNotifier,
+      builder: (ctx, tick, child) {
+        final slots = game.shelfFaceSlots();
+        if (slots.isEmpty) return const SizedBox.shrink();
+        // Cap the visible list and put the focused one first for readability
+        final focus = game.focusedSlot;
+        final ordered = <ShelfSlot>[];
+        if (focus != null && slots.contains(focus)) ordered.add(focus);
+        for (final s in slots) {
+          if (!identical(s, focus)) ordered.add(s);
+        }
+        final show = ordered.take(6).toList();
+
+        return Positioned(
+          left: AppTokens.s3,
+          top: MediaQuery.of(context).padding.top + 220,
+          child: IgnorePointer(
+            ignoring: false,
+            child: Container(
+              padding: const EdgeInsets.all(AppTokens.s2),
+              decoration: BoxDecoration(
+                color: AppTokens.surfaceElevated.withValues(alpha: 0.96),
+                borderRadius: BorderRadius.circular(AppTokens.rMd),
+                boxShadow: AppTokens.elev2,
+                border: Border.all(color: AppTokens.divider),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 2),
+                    child: Text('ON THIS SHELF', style: AppText.labelXS()),
+                  ),
+                  const SizedBox(height: 2),
+                  for (final slot in show)
+                    _ShelfFaceRow(
+                      slot: slot,
+                      focused: identical(slot, focus),
+                      onTap: () => game.setFocusedSlot(slot),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ShelfFaceRow extends StatelessWidget {
+  const _ShelfFaceRow({
+    required this.slot,
+    required this.focused,
+    required this.onTap,
+  });
+  final ShelfSlot slot;
+  final bool focused;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(AppTokens.rSm),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppTokens.rSm),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          decoration: BoxDecoration(
+            color: focused
+                ? AppTokens.accentSoft
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppTokens.rSm),
+            border: Border.all(
+              color: focused ? AppTokens.accent : Colors.transparent,
+              width: focused ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: slot.item.color,
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    width: 1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppTokens.s2),
+              SizedBox(
+                width: 110,
+                child: Text(
+                  slot.item.name,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppText.bodyM(
+                    color: focused ? AppTokens.accent : AppTokens.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
