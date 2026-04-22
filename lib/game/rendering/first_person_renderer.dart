@@ -69,6 +69,14 @@ class FirstPersonRenderer {
   /// Head bob accumulator — driven externally by walking speed.
   double _bobPhase = 0;
 
+  /// Shelf slots with lower stock render more transparent — signals to
+  /// the player "this aisle has been picked over."
+  static double _opacityForStock(int stock) {
+    const maxStock = 5; // matches ShelfSlot default
+    final t = (stock / maxStock).clamp(0.0, 1.0);
+    return 0.45 + t * 0.55;
+  }
+
   void updateHeadBob(double dt, double speed) {
     // Only bob when moving; scale by speed.
     if (speed > 5) {
@@ -466,6 +474,30 @@ class FirstPersonRenderer {
         worldSize: sprites.worldSizeFor('npc_${n.def.id}'),
         groundAnchor: 1.0,
       ));
+      // Fleeing thieves hold their stolen item overhead — shown as a
+      // smaller floating billboard. Makes recovery targeting legible.
+      if (n.state == NpcState.fleeing && n.stolenItem != null) {
+        candidates.add(_Billboard(
+          x: n.x,
+          y: n.y,
+          image: sprites.item(n.stolenItem!.id),
+          worldSize: sprites.worldSizeFor('item_${n.stolenItem!.id}') * 0.9,
+          groundAnchor: -0.2, // floats above head
+          tint: const Color(0x66E05B3F),
+        ));
+      }
+    }
+
+    // Pallets — short billboards on the floor blocking the aisle
+    for (final p in world.pallets) {
+      if (p.consumed) continue;
+      candidates.add(_Billboard(
+        x: p.x,
+        y: p.y,
+        image: sprites.pallet(),
+        worldSize: sprites.worldSizeFor('pallet'),
+        groundAnchor: 1.0,
+      ));
     }
 
     // Parked cart
@@ -479,16 +511,28 @@ class FirstPersonRenderer {
       ));
     }
 
-    // Currently-focused shelf item (draws in front of the shelf wall so
-    // the player sees what they're about to grab).
-    if (focused != null && !focused.empty) {
+    // All shelf items within a draw-distance of the camera. Stock is
+    // reflected in opacity so shelves visibly deplete as the store runs.
+    // Culled aggressively to keep the sprite count manageable.
+    const maxDist2 = 700.0 * 700.0;
+    for (final slot in world.shelfIndex.slots) {
+      if (slot.empty) continue;
+      final dx = slot.position.dx - camX;
+      final dy = slot.position.dy - camY;
+      if (dx * dx + dy * dy > maxDist2) continue;
+      final isFocused = identical(slot, focused);
       candidates.add(_Billboard(
-        x: focused.position.dx,
-        y: focused.position.dy,
-        image: sprites.item(focused.item.id),
-        worldSize: sprites.worldSizeFor('item_${focused.item.id}'),
+        x: slot.position.dx,
+        y: slot.position.dy,
+        image: sprites.item(slot.item.id),
+        // Focused slot stays at full display size for readability; others
+        // render slightly smaller so they don't dominate the shelf face.
+        worldSize: isFocused
+            ? sprites.worldSizeFor('item_${slot.item.id}')
+            : sprites.worldSizeFor('item_${slot.item.id}') * 0.78,
         groundAnchor: 0.55, // floats at shelf mid-height
-        tint: const Color(0x33FFD166),
+        tint: isFocused ? const Color(0x33FFD166) : null,
+        opacity: _opacityForStock(slot.stock),
       ));
     }
 
@@ -536,6 +580,10 @@ class FirstPersonRenderer {
             ..colorFilter = ui.ColorFilter.mode(b.tint!, BlendMode.srcATop)
             ..filterQuality = FilterQuality.none)
           : (Paint()..filterQuality = FilterQuality.none);
+      if (b.opacity < 1) {
+        tintPaint.color = tintPaint.color
+            .withValues(alpha: b.opacity.clamp(0.0, 1.0));
+      }
 
       for (var col = firstCol; col <= lastCol; col++) {
         // Depth test vs wall buffer — skip if a wall is closer.
@@ -785,6 +833,7 @@ class _Billboard {
     required this.worldSize,
     this.groundAnchor = 1.0,
     this.tint,
+    this.opacity = 1.0,
   });
   final double x;
   final double y;
@@ -795,6 +844,7 @@ class _Billboard {
   /// by top.
   final double groundAnchor;
   final Color? tint;
+  final double opacity;
   double relX = 0;
   double relY = 0;
 }

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../game/announcements.dart';
 import '../game/data/carts.dart';
 import '../game/data/modes.dart';
 import '../game/entities.dart';
@@ -116,6 +117,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
             _ShelfFacePanel(game: _game),
 
+            _CompassHud(notifier: _game.compassNotifier),
+            _AnnouncementBanner(notifier: _game.announcements.current),
             _BannerToast(notifier: _game.bannerNotifier),
           ],
         ),
@@ -744,6 +747,136 @@ class _ShelfFaceRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ============================================================
+//  Store announcement banner — PA line, centred at top.
+// ============================================================
+
+class _AnnouncementBanner extends StatelessWidget {
+  const _AnnouncementBanner({required this.notifier});
+  final ValueListenable<StoreAnnouncement?> notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<StoreAnnouncement?>(
+      valueListenable: notifier,
+      builder: (ctx, ann, child) {
+        final visible = ann != null;
+        final color = switch (ann?.tone) {
+          AnnouncementTone.sale => AppTokens.accent,
+          AnnouncementTone.warning => AppTokens.danger,
+          _ => AppTokens.ink,
+        };
+        return Positioned(
+          top: MediaQuery.of(context).padding.top + 176,
+          left: AppTokens.s5,
+          right: AppTokens.s5,
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: visible ? 1 : 0,
+              duration: const Duration(milliseconds: 220),
+              child: AnimatedSlide(
+                offset: visible ? Offset.zero : const Offset(0, -0.2),
+                duration: const Duration(milliseconds: 220),
+                curve: Curves.easeOutCubic,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: AppTokens.s4, vertical: AppTokens.s2),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(AppTokens.rSm),
+                      boxShadow: AppTokens.elev2,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.campaign_outlined,
+                            color: Colors.white, size: 16),
+                        const SizedBox(width: AppTokens.s2),
+                        Flexible(
+                          child: Text(
+                            ann?.text ?? '',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppText.bodyM(color: Colors.white)
+                                .copyWith(fontStyle: FontStyle.italic),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ============================================================
+//  Compass HUD — arrow + item label pointing at the nearest
+//  listed item (or the checkout when the list is complete).
+// ============================================================
+
+class _CompassHud extends StatelessWidget {
+  const _CompassHud({required this.notifier});
+  final ValueListenable<CompassHint?> notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<CompassHint?>(
+      valueListenable: notifier,
+      builder: (ctx, hint, child) {
+        if (hint == null) return const SizedBox.shrink();
+        return Positioned(
+          top: MediaQuery.of(context).padding.top + 132,
+          left: 0,
+          right: 0,
+          child: IgnorePointer(
+            child: Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppTokens.s3, vertical: 6),
+                decoration: BoxDecoration(
+                  color: AppTokens.surfaceElevated.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(AppTokens.rPill),
+                  boxShadow: AppTokens.elev1,
+                  border: Border.all(color: AppTokens.divider),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Transform.rotate(
+                      angle: hint.angle,
+                      child: const Icon(
+                        Icons.navigation_rounded,
+                        size: 16,
+                        color: AppTokens.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      hint.label,
+                      style: AppText.labelXS(color: AppTokens.ink),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${hint.distance.round()}m',
+                      style: AppText.caption(color: AppTokens.inkSubtle),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

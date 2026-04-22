@@ -14,6 +14,8 @@ enum NpcState {
   crossing,   // walking across an open floor to another section
   stunned,    // briefly knocked off path after a collision
   thieving,   // walking to an unattended cart to nick an item
+  fleeing,    // thief escaping with a stolen item
+  chasing,    // NPC pursuing the player (reserved; unused for now)
 }
 
 /// Behavioural archetype for NPCs. Affects walking speed, how long they
@@ -110,6 +112,24 @@ class AisleSign {
   final String sectionId;
 }
 
+/// A restocking pallet placed in the aisle by a stocker NPC. Blocks cart
+/// movement while it's there; removed when the stocker finishes.
+class Pallet {
+  Pallet({
+    required this.x,
+    required this.y,
+    required this.owner,
+    this.life = 10.0,
+  });
+  final double x;
+  final double y;
+  /// Stocker NPC that placed this pallet — the pallet is removed when they
+  /// transition out of their `reaching` state.
+  final Npc owner;
+  double life;
+  bool consumed = false;
+}
+
 /// The store world. Shelves are now containers of slots; items live in
 /// slots rather than as free-floating pickups.
 class StoreWorld {
@@ -131,6 +151,9 @@ class StoreWorld {
   /// Hang points for ceiling aisle signs. One per section, placed at the
   /// centre of the section's first zone.
   final List<AisleSign> aisleSigns = [];
+
+  /// Active pallets placed by stockers. Block cart movement.
+  final List<Pallet> pallets = [];
 
   /// Populate slots on every shelf, fridge, and produce bin. Also spawn
   /// NPCs and define checkout lanes.
@@ -331,11 +354,24 @@ class StoreWorld {
             n.occupyingSlot = null;
             n.state = NpcState.browsing;
             n.target = null;
+            // Stockers drag a pallet into the aisle while restocking — pull
+            // it back when they leave.
+            pallets.removeWhere((p) => identical(p.owner, n));
           case NpcState.thieving:
-            // "Nicked" an item — set stolenItem and flee
-            n.state = NpcState.crossing;
-            n.target = layout.randomWalkablePoint(_rng);
-            n.stateTimer = 0;
+            // Finished grabbing at the cart — transition to fleeing with
+            // the stolen item visible above their head. Target the far
+            // corner from the player so the player has to chase.
+            n.state = NpcState.fleeing;
+            n.target = _farCorner(px, py);
+            n.stateTimer = 12.0;
+          case NpcState.fleeing:
+            // Ran out the clock without being caught — despawn the thief
+            // and the item is lost for good.
+            n.consumed = true;
+            n.target = null;
+          case NpcState.chasing:
+            n.state = NpcState.browsing;
+            n.target = null;
           case NpcState.browsing:
           case NpcState.crossing:
             break;
@@ -379,7 +415,13 @@ class StoreWorld {
       'stocker' => 50.0,
       _ => 60.0,
     };
-    final speed = baseSpeed * n.personality.speedMult;
+    // Fleeing/chasing NPCs move faster regardless of personality.
+    final stateMult = switch (n.state) {
+      NpcState.fleeing => 1.8,
+      NpcState.chasing => 1.5,
+      _ => 1.0,
+    };
+    final speed = baseSpeed * n.personality.speedMult * stateMult;
     final nx = n.x + dx / d * speed * dt;
     final ny = n.y + dy / d * speed * dt;
     final slid = layout.slide(n.x, n.y, nx, ny, 18);
@@ -395,6 +437,14 @@ class StoreWorld {
       n.state = NpcState.reaching;
       final (lo, hi) = n.personality.lingerRange;
       n.stateTimer = lo + _rng.nextDouble() * (hi - lo);
+      // Stockers drop a pallet in the aisle next to the shelf they're
+      // restocking. Players have to route around it.
+      if (n.personality == NpcPersonality.worker) {
+        final slot = n.occupyingSlot!;
+        // Pallet sits roughly between the stocker and the open floor side.
+        final palletX = n.x + (slot.facing == -1 ? 40 : -40);
+        pallets.add(Pallet(x: palletX, y: n.y, owner: n));
+      }
       return;
     }
     // If thieving target reached: "nick" one item (caller resolves effect)
@@ -453,6 +503,32 @@ class StoreWorld {
     n.target = layout.randomWalkablePoint(_rng);
   }
 
+  /// True if a circle centred on (x,y) with `radius` overlaps any pallet.
+  /// Pallets are axis-aligned ~44-unit squares.
+  bool blockedByPallet(double x, double y, double radius) {
+    const half = 24.0;
+    for (final p in pallets) {
+      if (p.consumed) continue;
+      final cx = x.clamp(p.x - half, p.x + half);
+      final cy = y.clamp(p.y - half, p.y + half);
+      final dx = x - cx;
+      final dy = y - cy;
+      if (dx * dx + dy * dy < radius * radius) return true;
+    }
+    return false;
+  }
+
+  /// Slide a circle around pallets the same way the layout does around
+  /// static solids — try each axis independently.
+  Offset slideAroundPallets(
+      double fromX, double fromY, double toX, double toY, double radius) {
+    var x = fromX;
+    var y = fromY;
+    if (!blockedByPallet(toX, y, radius)) x = toX;
+    if (!blockedByPallet(x, toY, radius)) y = toY;
+    return Offset(x, y);
+  }
+
   /// Generate a shopping list: N items drawn from primary pools across
   /// several sections.
   List<MapEntry<String, int>> generateShoppingList(int targetCount) {
@@ -464,6 +540,30 @@ class StoreWorld {
           _rng.nextInt(section.itemIdsPrimary.length)]);
     }
     return ids.map((id) => MapEntry(id, 1 + _rng.nextInt(2))).toList();
+  }
+
+  /// Pick the corner of the store walkable area farthest from (x,y).
+  Offset _farCorner(double x, double y) {
+    final w = layout.size.width;
+    final h = layout.size.height;
+    final corners = <Offset>[
+      const Offset(120, 300),
+      Offset(w - 120, 300),
+      Offset(120, h - 260),
+      Offset(w - 120, h - 260),
+    ];
+    Offset best = corners.first;
+    double bestD2 = 0;
+    for (final c in corners) {
+      final dx = c.dx - x;
+      final dy = c.dy - y;
+      final d2 = dx * dx + dy * dy;
+      if (d2 > bestD2) {
+        bestD2 = d2;
+        best = c;
+      }
+    }
+    return best;
   }
 
   // -------- helpers --------

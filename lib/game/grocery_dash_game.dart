@@ -8,7 +8,9 @@ import 'package:flutter/foundation.dart';
 import 'data/carts.dart';
 import 'data/items.dart';
 import 'data/modes.dart';
+import 'data/sections.dart';
 import 'entities.dart';
+import 'announcements.dart';
 import 'audio.dart';
 import 'rendering/first_person_renderer.dart';
 import 'rendering/follow_cam_renderer.dart';
@@ -102,6 +104,14 @@ class GroceryDashGame extends FlameGame {
   /// Non-null while an item contest is in progress.
   final ValueNotifier<bool> contestNotifier = ValueNotifier(false);
 
+  /// Rotating PA announcements.
+  final AnnouncementQueue announcements = AnnouncementQueue();
+
+  /// Compass hint — polar angle (radians, 0 = forward, -π/2 = left) from
+  /// the cart to the nearest needed shelf slot, plus the label of the
+  /// item we're pointing at. Null when list is empty / player is at goal.
+  final ValueNotifier<CompassHint?> compassNotifier = ValueNotifier(null);
+
   // World + entities — eagerly initialised with placeholders so the HUD
   // (which may build before onLoad completes) can read them safely.
   late StoreWorld storeWorld;
@@ -146,6 +156,9 @@ class GroceryDashGame extends FlameGame {
   // Slot interaction
   ShelfSlot? _focusedSlot;
   Npc? _contestOpponent; // NPC also going for the focused slot
+
+  /// Identity set so we only announce each pallet once when it appears.
+  final Set<Pallet> _announcedPallets = {};
 
   /// All slots on the same shelf face as the currently focused slot. Used
   /// by the HUD shelf-face selector. Groups by matching `facing` sign and
@@ -364,6 +377,26 @@ class GroceryDashGame extends FlameGame {
           storeWorld.layout.sectionAtPoint(player.x, player.y);
     }
 
+    // Announce newly-placed pallets once each
+    for (final p in storeWorld.pallets) {
+      if (_announcedPallets.add(p)) {
+        final sec = sectionById(
+            storeWorld.layout.sectionAtPoint(p.x, p.y));
+        announcements.push(StoreAnnouncement(
+          text: 'Caution: restocking in ${sec.name}.',
+          tone: AnnouncementTone.warning,
+        ));
+      }
+    }
+    _announcedPallets.removeWhere((p) => p.consumed ||
+        !storeWorld.pallets.contains(p));
+
+    // Tick the announcement queue
+    announcements.tick(dt);
+
+    // Update the shopping-list compass hint
+    _updateCompass();
+
     // Footstep audio on foot
     if (player.mode == PlayerMode.onFoot && bobSpeed > 60) {
       GameAudio.instance.footstep(
@@ -503,8 +536,10 @@ class GroceryDashGame extends FlameGame {
     // Apply movement with wall sliding
     final nx = cart.x + cart.vx * dt;
     final ny = cart.y + cart.vy * dt;
-    final slid = storeWorld.layout.slide(cart.x, cart.y, nx, ny, _cartRadius);
-    // If we got clipped, kill velocity along that axis
+    var slid =
+        storeWorld.layout.slide(cart.x, cart.y, nx, ny, _cartRadius);
+    slid = storeWorld.slideAroundPallets(
+        cart.x, cart.y, slid.dx, slid.dy, _cartRadius);
     if (slid.dx == cart.x) cart.vx = 0;
     if (slid.dy == cart.y) cart.vy = 0;
     cart.x = slid.dx;
@@ -546,8 +581,10 @@ class GroceryDashGame extends FlameGame {
     }
     final nx = player.x + player.vx * dt;
     final ny = player.y + player.vy * dt;
-    final slid =
+    var slid =
         storeWorld.layout.slide(player.x, player.y, nx, ny, _playerRadius);
+    slid = storeWorld.slideAroundPallets(
+        player.x, player.y, slid.dx, slid.dy, _playerRadius);
     player.x = slid.dx;
     player.y = slid.dy;
     _resolveNpcBumps(pushing: false);
@@ -603,6 +640,14 @@ class GroceryDashGame extends FlameGame {
       cart.addItem(slot.item);
       list.recount(cart);
       GameAudio.instance.pickupChime();
+      // If this slot is the last of its kind and it was on the list,
+      // announce the milestone. (Quiet moment of progress.)
+      if (list.allComplete) {
+        announcements.push(StoreAnnouncement(
+          text: 'List complete. Please proceed to checkout.',
+          tone: AnnouncementTone.sale,
+        ));
+      }
       // Won a contest — annoy the NPC and bounce them to a new target.
       if (contestNotifier.value) {
         final opp = _contestOpponent;
@@ -657,9 +702,12 @@ class GroceryDashGame extends FlameGame {
       // now fleeing. We remove one random item from the basket when the
       // animation first triggers (stateTimer > 0 but stolenItem was just set
       // by world). Simple guard: remove only once per theft.
-      if (n.stateTimer > 0 && cart.basket.isNotEmpty &&
-          n.stolenItem == kItems.first && _rng().nextDouble() < 0.9) {
-        // Pick a random item from cart and yank it
+      // Only trigger the real theft once — marker is `stolenItem == kItems.first`
+      // (a placeholder set by the world when the thief first touches the cart).
+      if (n.stateTimer > 0 &&
+          cart.basket.isNotEmpty &&
+          n.stolenItem == kItems.first &&
+          _rng().nextDouble() < 0.9) {
         final idx = _rng().nextInt(cart.basket.length);
         final item = cart.basket.removeAt(idx);
         n.stolenItem = item;
@@ -667,6 +715,10 @@ class GroceryDashGame extends FlameGame {
         _itemsStolenByNpcs++;
         GameAudio.instance.thiefWarning();
         _npcSay(n, kThiefLines, duration: 2.4);
+        announcements.push(StoreAnnouncement(
+          text: 'They took your ${item.name}. Catch them to get it back!',
+          tone: AnnouncementTone.warning,
+        ));
         _setBanner('Someone took your ${item.name}!');
       }
     }
@@ -718,6 +770,21 @@ class GroceryDashGame extends FlameGame {
         final pool = kBumpLinesByPersonality[n.personality] ??
             kBumpLinesByPersonality[NpcPersonality.browser]!;
         _npcSay(n, pool, duration: 1.4);
+        // Caught a fleeing thief with a stolen item — recover it.
+        if (n.state == NpcState.fleeing && n.stolenItem != null) {
+          final item = n.stolenItem!;
+          cart.addItem(item);
+          list.recount(cart);
+          _itemsStolenByNpcs = math.max(0, _itemsStolenByNpcs - 1);
+          n.stolenItem = null;
+          n.consumed = true; // thief scurries off the map
+          GameAudio.instance.pickupChime();
+          announcements.push(StoreAnnouncement(
+            text: 'Got your ${item.name} back.',
+            tone: AnnouncementTone.sale,
+          ));
+          _setBanner('Recovered your ${item.name}!');
+        }
         // Slow the player/cart + nudge-slide along the tangent so we don't
         // hard-stop on contact. Decomposes velocity into normal + tangent
         // components and cancels the normal into the NPC.
@@ -811,6 +878,84 @@ class GroceryDashGame extends FlameGame {
     bannerNotifier.value = text;
   }
 
+  /// Recompute the compass hint pointing at the nearest listed item, or
+  /// the nearest checkout once the list is complete.
+  void _updateCompass() {
+    final ax = cart.state == CartState.attached ? cart.x : player.x;
+    final ay = cart.state == CartState.attached ? cart.y : player.y;
+    final facing = player.facing;
+    if (list.allComplete) {
+      // Point at the nearest checkout interact point.
+      CheckoutLane? best;
+      double bestD2 = double.infinity;
+      for (final c in storeWorld.checkouts) {
+        final dx = c.interactPoint.dx - ax;
+        final dy = c.interactPoint.dy - ay;
+        final d2 = dx * dx + dy * dy;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          best = c;
+        }
+      }
+      if (best == null) {
+        compassNotifier.value = null;
+        return;
+      }
+      final dx = best.interactPoint.dx - ax;
+      final dy = best.interactPoint.dy - ay;
+      final absAngle = math.atan2(dy, dx);
+      final rel = _shortestAngle(absAngle - facing);
+      compassNotifier.value = CompassHint(
+        angle: rel,
+        label: 'Checkout',
+        distance: math.sqrt(bestD2),
+      );
+      return;
+    }
+    // Find the closest shelf slot holding any incomplete listed item.
+    final neededIds = <String>{
+      for (final e in list.entries)
+        if (!e.complete) e.item.id,
+    };
+    if (neededIds.isEmpty) {
+      compassNotifier.value = null;
+      return;
+    }
+    ShelfSlot? best;
+    double bestD2 = double.infinity;
+    for (final s in storeWorld.shelfIndex.slots) {
+      if (s.empty) continue;
+      if (!neededIds.contains(s.item.id)) continue;
+      final dx = s.position.dx - ax;
+      final dy = s.position.dy - ay;
+      final d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = s;
+      }
+    }
+    if (best == null) {
+      compassNotifier.value = null;
+      return;
+    }
+    final dx = best.position.dx - ax;
+    final dy = best.position.dy - ay;
+    final absAngle = math.atan2(dy, dx);
+    final rel = _shortestAngle(absAngle - facing);
+    compassNotifier.value = CompassHint(
+      angle: rel,
+      label: best.item.name,
+      distance: math.sqrt(bestD2),
+    );
+  }
+
+  double _shortestAngle(double d) {
+    var x = d % (2 * math.pi);
+    if (x > math.pi) x -= 2 * math.pi;
+    if (x < -math.pi) x += 2 * math.pi;
+    return x;
+  }
+
   /// Make an NPC speak a line from a dialogue pool. Plays a quiet blip as
   /// feedback. No-op if the NPC is consumed.
   void _npcSay(Npc n, List<String> pool, {double duration = 2.0}) {
@@ -849,6 +994,8 @@ class GroceryDashGame extends FlameGame {
     checkoutProgressNotifier.dispose();
     shelfFaceTickNotifier.dispose();
     contestNotifier.dispose();
+    announcements.dispose();
+    compassNotifier.dispose();
     super.onRemove();
   }
 }
@@ -864,4 +1011,17 @@ class InteractPrompt {
       InteractPrompt._(label: 'GRAB', subLabel: item.name);
   factory InteractPrompt.scan() =>
       const InteractPrompt._(label: 'SCAN', subLabel: 'Checkout');
+}
+
+/// Compass chip content for the HUD. `angle` is in radians relative to the
+/// player's facing (0 = straight ahead, negative = left, positive = right).
+class CompassHint {
+  const CompassHint({
+    required this.angle,
+    required this.label,
+    required this.distance,
+  });
+  final double angle;
+  final String label;
+  final double distance;
 }
