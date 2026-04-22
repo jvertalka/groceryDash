@@ -8,6 +8,7 @@ import '../entities.dart';
 import '../world/grid_world.dart';
 import '../world/shelf.dart';
 import '../world/store_world.dart';
+import '../data/sections.dart';
 import 'sprite_atlas.dart';
 import 'textures.dart';
 
@@ -49,6 +50,10 @@ class FirstPersonRenderer {
   /// Updated from the game class each frame.
   double cartDisplayHeading = 0;
   double cartPitchOffset = 0;   // +ve leans forward (accel), -ve back (brake)
+
+  /// Current section id the camera is inside. Renderer uses this to apply
+  /// the freezer-aisle blue tint + cold mist overlay.
+  String currentSectionId = '';
 
   /// Horizontal FOV in radians. ~72° gives a comfortable "pushing a cart"
   /// feel without fish-eye.
@@ -107,6 +112,9 @@ class FirstPersonRenderer {
       _drawColumn(canvas, i, columns, w, h, horizon, hit, rayAngle, facing);
     }
 
+    // --- Ceiling aisle signs ---
+    _drawAisleSigns(canvas, world, camX, camY, facing, w, horizon);
+
     // --- Billboards (NPCs, parked cart, focused shelf item) ---
     _drawSprites(
       canvas,
@@ -126,7 +134,41 @@ class FirstPersonRenderer {
     _drawForegroundCart(canvas, w, h, horizon, cartDef, cart, player);
 
     // --- Crosshair ---
+    // Section-specific weather overlay (currently: freezer aisle blue tint)
+    _drawSectionWeather(canvas, w, h);
+
     _drawCrosshair(canvas, w, horizon, focusedSlot != null);
+  }
+
+  /// Atmospheric overlay based on the current section. Frozen aisle: pale
+  /// blue wash + soft ice particles drifting across the lower half.
+  void _drawSectionWeather(Canvas canvas, double w, double h) {
+    if (currentSectionId == 'frozen') {
+      // Blue wash with stronger effect toward the top
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, w, h),
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              const Color(0xFF9CC4D8).withValues(alpha: 0.22),
+              const Color(0xFF9CC4D8).withValues(alpha: 0.08),
+            ],
+          ).createShader(Rect.fromLTWH(0, 0, w, h)),
+      );
+      // Mist particles (stable positions based on time not randomised each
+      // frame — keeps the cost negligible and avoids flicker)
+      final mist = Paint()..color = Colors.white.withValues(alpha: 0.35);
+      for (var i = 0; i < 14; i++) {
+        final t = (i * 71) % 100 / 100.0;
+        final drift = (DateTime.now().millisecondsSinceEpoch / 7000 + i) % 1.0;
+        final x = (t * 1.3 + drift) % 1.0;
+        final y = 0.25 + ((i * 37) % 100) / 140.0;
+        canvas.drawCircle(
+            Offset(x * w, y * h), 6.0 + (i % 3) * 2.0, mist);
+      }
+    }
   }
 
   // ----- backgrounds -----
@@ -295,6 +337,103 @@ class FirstPersonRenderer {
         BlendMode.darken,
       );
     canvas.drawImageRect(tex, src, dst, paint);
+  }
+
+  // ----- aisle signs (ceiling-hung, always-visible) -----
+  void _drawAisleSigns(
+    Canvas canvas,
+    StoreWorld world,
+    double camX,
+    double camY,
+    double facing,
+    double w,
+    double horizon,
+  ) {
+    final cosA = math.cos(-facing);
+    final sinA = math.sin(-facing);
+    final focal = (w / 2) / math.tan(_fov / 2);
+    // Height above floor where signs hang. Positive = further above the
+    // horizon on screen.
+    const hangHeight = 150.0;
+
+    for (final sign in world.aisleSigns) {
+      final dx = sign.position.dx - camX;
+      final dy = sign.position.dy - camY;
+      final rx = dx * cosA - dy * sinA;
+      final ry = dx * sinA + dy * cosA;
+      if (rx <= 1) continue;
+
+      final screenX = w / 2 + (ry * focal) / rx;
+      final screenSize = (120 * focal) / rx;
+      if (screenSize < 10) continue;
+      // Sign sits `hangHeight` above the floor at this depth.
+      final signY = horizon - (hangHeight * focal) / rx;
+
+      // Depth test — hide if a wall is in front of us (sign can't float
+      // through a wall).
+      final col = (screenX / _pixelStep).floor();
+      if (col >= 0 && col < _zBuffer.length && rx >= _zBuffer[col]) {
+        continue;
+      }
+
+      _paintSign(canvas, Offset(screenX, signY), screenSize, sign.sectionId);
+    }
+  }
+
+  void _paintSign(
+      Canvas canvas, Offset anchor, double screenSize, String sectionId) {
+    final section = sectionById(sectionId);
+    final label = '${section.emoji}  ${section.name.toUpperCase()}';
+    // Sign body: rounded rect in section accent colour.
+    final width = screenSize * 1.7;
+    final height = screenSize * 0.42;
+    final rect = Rect.fromCenter(center: anchor, width: width, height: height);
+    final rr = RRect.fromRectAndRadius(rect, Radius.circular(height * 0.18));
+    // Drop shadow
+    canvas.drawRRect(
+      rr.shift(const Offset(0, 3)),
+      Paint()..color = Colors.black.withValues(alpha: 0.3),
+    );
+    canvas.drawRRect(rr, Paint()..color = section.accentColor);
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = math.max(1, height * 0.06),
+    );
+    // Sign cables to ceiling
+    final cable = Paint()
+      ..color = Colors.black.withValues(alpha: 0.5)
+      ..strokeWidth = math.max(1, height * 0.05);
+    canvas.drawLine(
+      Offset(rect.left + width * 0.2, rect.top),
+      Offset(rect.left + width * 0.2, rect.top - height * 0.6),
+      cable,
+    );
+    canvas.drawLine(
+      Offset(rect.right - width * 0.2, rect.top),
+      Offset(rect.right - width * 0.2, rect.top - height * 0.6),
+      cable,
+    );
+    // Label
+    final fontSize = math.max(8.0, height * 0.45);
+    final builder = ui.ParagraphBuilder(ui.ParagraphStyle(
+      textAlign: TextAlign.center,
+      fontSize: fontSize,
+      fontWeight: FontWeight.w900,
+    ))
+      ..pushStyle(TextStyle(
+        color: Colors.white,
+        letterSpacing: fontSize * 0.1,
+      ).getTextStyle())
+      ..addText(label);
+    final para = builder.build()
+      ..layout(ui.ParagraphConstraints(width: width));
+    canvas.drawParagraph(
+      para,
+      Offset(rect.left, rect.center.dy - fontSize * 0.65),
+    );
   }
 
   // ----- sprite billboards -----

@@ -16,6 +16,43 @@ enum NpcState {
   thieving,   // walking to an unattended cart to nick an item
 }
 
+/// Behavioural archetype for NPCs. Affects walking speed, how long they
+/// linger at a shelf, which section they prefer, and which dialogue lines
+/// they use on bump.
+enum NpcPersonality {
+  browser,   // default; takes their time, no section preference
+  couponer,  // slow, lingers a long time, hoards one section
+  parent,    // jittery, changes direction often, short linger
+  rusher,    // in a hurry, fast, rude
+  worker,    // stocker; stays at shelves longer, moderate speed
+}
+
+extension NpcPersonalityX on NpcPersonality {
+  double get speedMult => switch (this) {
+        NpcPersonality.browser => 1.0,
+        NpcPersonality.couponer => 0.55,
+        NpcPersonality.parent => 1.1,
+        NpcPersonality.rusher => 1.55,
+        NpcPersonality.worker => 0.75,
+      };
+
+  /// (min, max) seconds an NPC lingers at a shelf slot.
+  (double, double) get lingerRange => switch (this) {
+        NpcPersonality.browser => (2.0, 4.0),
+        NpcPersonality.couponer => (4.0, 7.0),
+        NpcPersonality.parent => (0.9, 1.8),
+        NpcPersonality.rusher => (0.6, 1.4),
+        NpcPersonality.worker => (3.0, 5.0),
+      };
+
+  /// Probability per frame of picking a new random target mid-path.
+  double get jitterChance => switch (this) {
+        NpcPersonality.parent => 0.003,
+        NpcPersonality.rusher => 0.001,
+        _ => 0.0,
+      };
+}
+
 /// An NPC shopper with simple goal-directed behaviour: pick a section,
 /// walk to a shelf slot, "reach" for a few seconds (occupying the slot),
 /// move on. Occasionally a shopper will decide to browse an unattended
@@ -45,6 +82,12 @@ class Npc {
   String? dialogue;
   double dialogueTimer = 0;
 
+  /// Behavioural archetype assigned at spawn.
+  NpcPersonality personality = NpcPersonality.browser;
+
+  /// Couponers prefer shelves in this section.
+  String? preferredSectionId;
+
   bool get isStunned => state == NpcState.stunned;
   bool get isReaching => state == NpcState.reaching;
   bool get isThieving => state == NpcState.thieving;
@@ -55,6 +98,16 @@ class CheckoutLane {
   const CheckoutLane({required this.rect, required this.interactPoint});
   final Rect rect;
   final Offset interactPoint; // where the cart has to be to trigger scan
+}
+
+/// A ceiling-hung aisle sign billboarded in first-person view.
+class AisleSign {
+  const AisleSign({
+    required this.position,
+    required this.sectionId,
+  });
+  final Offset position;
+  final String sectionId;
 }
 
 /// The store world. Shelves are now containers of slots; items live in
@@ -74,6 +127,10 @@ class StoreWorld {
 
   final List<Npc> npcs = [];
   final List<CheckoutLane> checkouts = [];
+
+  /// Hang points for ceiling aisle signs. One per section, placed at the
+  /// centre of the section's first zone.
+  final List<AisleSign> aisleSigns = [];
 
   /// Populate slots on every shelf, fridge, and produce bin. Also spawn
   /// NPCs and define checkout lanes.
@@ -107,6 +164,19 @@ class StoreWorld {
     }
 
     _spawnNpcs(12);
+
+    // One sign per section, hung at the centre of the first zone with
+    // that section id.
+    aisleSigns.clear();
+    final placed = <String>{};
+    for (final zone in layout.zones) {
+      if (placed.contains(zone.sectionId)) continue;
+      placed.add(zone.sectionId);
+      aisleSigns.add(AisleSign(
+        position: zone.rect.center,
+        sectionId: zone.sectionId,
+      ));
+    }
   }
 
   void _populateShelfFaces(SolidRect shelf, List<ShelfSlot> out) {
@@ -190,8 +260,34 @@ class StoreWorld {
       final id = pool[_rng.nextInt(pool.length)];
       final def = kObstacles.firstWhere((o) => o.id == id,
           orElse: () => kObstacles.first);
-      npcs.add(Npc(def: def, x: p.dx, y: p.dy));
+      final npc = Npc(def: def, x: p.dx, y: p.dy)
+        ..personality = _rollPersonality(def.id);
+      if (npc.personality == NpcPersonality.couponer) {
+        npc.preferredSectionId =
+            kSections[_rng.nextInt(kSections.length)].id;
+      }
+      npcs.add(npc);
     }
+  }
+
+  /// Weighted personality roll. The NPC's `def.id` biases the distribution:
+  /// stockers are always workers, kids are never couponers, runaway carts
+  /// are always rushers.
+  NpcPersonality _rollPersonality(String defId) {
+    if (defId == 'stocker') return NpcPersonality.worker;
+    if (defId == 'cart') return NpcPersonality.rusher;
+    if (defId == 'kid') {
+      // Kids are parents-adjacent or browsers
+      return _rng.nextDouble() < 0.5
+          ? NpcPersonality.parent
+          : NpcPersonality.browser;
+    }
+    // Regular shoppers — weighted mix
+    final r = _rng.nextDouble();
+    if (r < 0.40) return NpcPersonality.browser;
+    if (r < 0.65) return NpcPersonality.couponer;
+    if (r < 0.85) return NpcPersonality.parent;
+    return NpcPersonality.rusher;
   }
 
   /// Advance the world. Player world-space position is needed for chase
@@ -226,10 +322,13 @@ class StoreWorld {
             n.state = NpcState.browsing;
             n.target = null;
           case NpcState.reaching:
-            // Release the slot and pick a new target
-            if (n.occupyingSlot != null) {
-              n.occupyingSlot = null;
+            // Pull one unit of stock off the shelf when the NPC leaves —
+            // they "took" the item with them. Empty slots silently release.
+            final slot = n.occupyingSlot;
+            if (slot != null && !slot.empty) {
+              slot.stock--;
             }
+            n.occupyingSlot = null;
             n.state = NpcState.browsing;
             n.target = null;
           case NpcState.thieving:
@@ -255,10 +354,13 @@ class StoreWorld {
       n.stateTimer = 0;
     }
 
-    // Pick a new destination if we don't have one
+    // Pick a new destination if we don't have one, or jitter to a new one
+    // for personalities that fidget (parents, rushers).
+    final jittered = _rng.nextDouble() < n.personality.jitterChance;
     if ((n.state == NpcState.browsing || n.state == NpcState.crossing) &&
         (n.target == null ||
-            _d2(n.x, n.y, n.target!.dx, n.target!.dy) < 24 * 24)) {
+            _d2(n.x, n.y, n.target!.dx, n.target!.dy) < 24 * 24 ||
+            jittered)) {
       _pickNewTarget(n);
     }
 
@@ -271,12 +373,13 @@ class StoreWorld {
     final d = _len(dx, dy);
     if (d < 1) return;
 
-    final speed = switch (n.def.id) {
+    final baseSpeed = switch (n.def.id) {
       'cart' => 110.0,
       'kid' => 90.0,
       'stocker' => 50.0,
       _ => 60.0,
     };
+    final speed = baseSpeed * n.personality.speedMult;
     final nx = n.x + dx / d * speed * dt;
     final ny = n.y + dy / d * speed * dt;
     final slid = layout.slide(n.x, n.y, nx, ny, 18);
@@ -290,7 +393,8 @@ class StoreWorld {
         _d2(n.x, n.y, target.dx, target.dy) < 24 * 24 &&
         n.occupyingSlot != null) {
       n.state = NpcState.reaching;
-      n.stateTimer = 2 + _rng.nextDouble() * 2;
+      final (lo, hi) = n.personality.lingerRange;
+      n.stateTimer = lo + _rng.nextDouble() * (hi - lo);
       return;
     }
     // If thieving target reached: "nick" one item (caller resolves effect)
@@ -305,23 +409,44 @@ class StoreWorld {
     }
   }
 
-  /// Pick a new target for the NPC — usually a shelf slot in a random section.
+  /// Pick a new target for the NPC — usually a shelf slot in a random
+  /// section. Couponers strongly prefer their assigned section. Rushers
+  /// prefer crossing over browsing (always on the move).
   void _pickNewTarget(Npc n) {
-    // 70% chance of heading to a shelf slot; 30% just crossing.
-    final picksShelf = _rng.nextDouble() < 0.7;
+    final personality = n.personality;
+    final picksShelfThreshold = switch (personality) {
+      NpcPersonality.rusher => 0.25,
+      NpcPersonality.couponer => 0.9,
+      NpcPersonality.worker => 0.85,
+      _ => 0.7,
+    };
+    final picksShelf = _rng.nextDouble() < picksShelfThreshold;
     if (picksShelf && shelfIndex.slots.isNotEmpty) {
-      // Pick a free slot
-      for (var attempt = 0; attempt < 20; attempt++) {
-        final s = shelfIndex.slots[_rng.nextInt(shelfIndex.slots.length)];
-        if (s.empty) continue;
-        // Prefer a slot no other NPC is already reaching for
-        final taken = npcs.any((other) =>
-            other != n && other.occupyingSlot == s);
-        if (taken) continue;
-        n.state = NpcState.browsing;
-        n.target = s.position;
-        n.occupyingSlot = s;
-        return;
+      // Couponers: filter by their preferred section first.
+      final candidates = personality == NpcPersonality.couponer &&
+              n.preferredSectionId != null
+          ? shelfIndex.slots
+              .where((s) {
+                final z = layout.zones.firstWhere(
+                  (z) => z.rect.contains(s.position),
+                  orElse: () => layout.zones.first,
+                );
+                return z.sectionId == n.preferredSectionId;
+              })
+              .toList()
+          : shelfIndex.slots;
+      if (candidates.isNotEmpty) {
+        for (var attempt = 0; attempt < 20; attempt++) {
+          final s = candidates[_rng.nextInt(candidates.length)];
+          if (s.empty) continue;
+          final taken = npcs.any((other) =>
+              other != n && other.occupyingSlot == s);
+          if (taken) continue;
+          n.state = NpcState.browsing;
+          n.target = s.position;
+          n.occupyingSlot = s;
+          return;
+        }
       }
     }
     n.state = NpcState.crossing;

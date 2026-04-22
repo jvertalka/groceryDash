@@ -728,6 +728,18 @@ class _ShelfFaceRow extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(width: AppTokens.s2),
+              // Stock count: dim when plentiful, accent when running low
+              Text(
+                '${slot.stock}',
+                style: AppText.caption(
+                  color: slot.stock <= 1
+                      ? AppTokens.danger
+                      : slot.stock <= 2
+                          ? AppTokens.warning
+                          : AppTokens.inkSubtle,
+                ),
+              ),
             ],
           ),
         ),

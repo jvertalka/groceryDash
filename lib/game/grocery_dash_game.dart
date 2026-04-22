@@ -22,13 +22,34 @@ import 'world/store_world.dart';
 
 typedef RunEndedCallback = void Function(RunResult result);
 
-/// One-liners NPCs say when you bump them. Variants exist for different
-/// NPC archetypes so a kid sounds different from a grump.
-const Map<String, List<String>> kBumpLines = {
-  'shopper': ['Excuse me!', 'Watch it!', 'Hey!', 'Oof.', 'Rude.'],
-  'stocker': ['Coming through!', 'Careful!', 'Let me work.'],
-  'kid': ['Sorry!', 'Woah!', 'Haha!'],
-  'cart': ['— —!', '…', '(crash)'],
+/// One-liners NPCs say when bumped, keyed by personality. Gives each
+/// archetype a distinct voice.
+const Map<NpcPersonality, List<String>> kBumpLinesByPersonality = {
+  NpcPersonality.browser: ['Excuse me!', 'Watch it!', 'Oof.', 'Rude.'],
+  NpcPersonality.couponer: [
+    'I had a coupon for that!',
+    'Excuse me, dearie.',
+    'Wait your turn.',
+    'Hmph.',
+  ],
+  NpcPersonality.parent: [
+    'Careful, my kid\'s right there!',
+    'Oh my god.',
+    'Sorry, sorry!',
+    'Hey, slow down.',
+  ],
+  NpcPersonality.rusher: [
+    'MOVE!',
+    'Coming through!',
+    'Behind you!',
+    'Out of my way!',
+  ],
+  NpcPersonality.worker: [
+    'Aisle\'s busy, friend.',
+    'Let me work.',
+    'Careful of the pallet.',
+    'Coming through with stock!',
+  ],
 };
 
 /// Lines NPCs say when they've just stolen an item from the player's cart.
@@ -113,6 +134,7 @@ class GroceryDashGame extends FlameGame {
   static const double _cartAccel = 900;             // px/s^2
   static const double _cartFriction = 5.0;          // velocity decay when idle
   static const double _cartBrakeFriction = 14.0;    // extra decay when braking
+  static const double _icyFrictionMult = 0.35;      // frozen aisle feels slippery
   static const double _playerRadius = 14;
   static const double _cartRadius = 22;
 
@@ -338,6 +360,8 @@ class GroceryDashGame extends FlameGame {
     if (_fpv != null) {
       _fpv!.cartDisplayHeading = _cartDisplayHeading;
       _fpv!.cartPitchOffset = _cartPitch;
+      _fpv!.currentSectionId =
+          storeWorld.layout.sectionAtPoint(player.x, player.y);
     }
 
     // Footstep audio on foot
@@ -425,22 +449,24 @@ class GroceryDashGame extends FlameGame {
       final vDotForward = cart.vx * forwardUnitX + cart.vy * forwardUnitY;
       _isBraking = vSpeed > 20 && forwardAmount < -0.2 && vDotForward > 0;
 
+      // Freezer aisle makes the floor slippery — less friction in all cases.
+      final icy = storeWorld.layout.sectionAtPoint(cart.x, cart.y) == 'frozen';
+      final frictionMult = icy ? _icyFrictionMult : 1.0;
       if (mag > 0.08) {
         final ax = forwardUnitX * forwardAmount * _cartAccel;
         final ay = forwardUnitY * forwardAmount * _cartAccel;
         cart.vx += ax * dt;
         cart.vy += ay * dt;
         if (_isBraking) {
-          // Extra deceleration while actively holding the stick against
-          // motion — turns the back-press into a real brake.
-          cart.vx -= cart.vx * math.min(1.0, _cartBrakeFriction * dt);
-          cart.vy -= cart.vy * math.min(1.0, _cartBrakeFriction * dt);
+          cart.vx -= cart.vx *
+              math.min(1.0, _cartBrakeFriction * frictionMult * dt);
+          cart.vy -= cart.vy *
+              math.min(1.0, _cartBrakeFriction * frictionMult * dt);
         }
-        // Sound: wheel squeak while pushing
         GameAudio.instance.wheelSqueak(speed: vSpeed);
       } else {
-        cart.vx -= cart.vx * math.min(1.0, _cartFriction * dt);
-        cart.vy -= cart.vy * math.min(1.0, _cartFriction * dt);
+        cart.vx -= cart.vx * math.min(1.0, _cartFriction * frictionMult * dt);
+        cart.vy -= cart.vy * math.min(1.0, _cartFriction * frictionMult * dt);
         if (cart.vx.abs() < 1) cart.vx = 0;
         if (cart.vy.abs() < 1) cart.vy = 0;
       }
@@ -689,7 +715,8 @@ class GroceryDashGame extends FlameGame {
           n.state = NpcState.stunned;
           n.stateTimer = 0.4;
         }
-        final pool = kBumpLines[n.def.id] ?? kBumpLines['shopper']!;
+        final pool = kBumpLinesByPersonality[n.personality] ??
+            kBumpLinesByPersonality[NpcPersonality.browser]!;
         _npcSay(n, pool, duration: 1.4);
         // Slow the player/cart + nudge-slide along the tangent so we don't
         // hard-stop on contact. Decomposes velocity into normal + tangent

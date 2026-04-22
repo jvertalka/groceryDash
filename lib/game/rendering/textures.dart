@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/sections.dart';
 import '../world/grid_world.dart';
@@ -37,16 +38,46 @@ class TextureAtlas {
   }
 
   Future<void> _generate() async {
-    _images['wall'] = await _buildWall();
-    _images['counter'] = await _buildCounter();
-    _images['produceBin'] = await _buildProduceBin();
-    _images['fridge'] = await _buildFridge();
-    // Shelf texture per section palette
+    // Each texture tries an asset file first; falls back to the procedural
+    // builder. Drop `assets/textures/<name>.png` files into the project to
+    // replace any of these with real art.
+    _images['wall'] =
+        await _loadOrBuild('wall', () => _buildWall());
+    _images['counter'] =
+        await _loadOrBuild('counter', () => _buildCounter());
+    _images['produceBin'] =
+        await _loadOrBuild('produceBin', () => _buildProduceBin());
+    _images['fridge'] =
+        await _loadOrBuild('fridge', () => _buildFridge());
     for (final section in kSections) {
-      _images['shelf|${section.id}'] = await _buildShelf(section);
+      final key = 'shelf|${section.id}';
+      _images[key] = await _loadOrBuild(
+        'shelf_${section.id}',
+        () => _buildShelf(section),
+      );
     }
-    // Also key section-agnostic fallbacks
     _images['shelf'] = _images['shelf|${kSections.first.id}']!;
+  }
+
+  /// Try to load a texture from `assets/textures/<name>.png`; if the asset
+  /// doesn't exist or fails to decode, fall back to the procedural builder.
+  Future<ui.Image> _loadOrBuild(
+      String name, Future<ui.Image> Function() build) async {
+    final asset = await _tryAsset('assets/textures/$name.png');
+    if (asset != null) return asset;
+    return build();
+  }
+
+  Future<ui.Image?> _tryAsset(String path) async {
+    try {
+      final data = await rootBundle.load(path);
+      final codec =
+          await ui.instantiateImageCodec(data.buffer.asUint8List());
+      final frame = await codec.getNextFrame();
+      return frame.image;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<ui.Image> _buildWall() async {
