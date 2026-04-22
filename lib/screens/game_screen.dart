@@ -486,7 +486,10 @@ class _InteractButton extends StatelessWidget {
               valueListenable: game.checkoutProgressNotifier,
               builder: (ctx3, checkout, child3) {
                 final progress = checkout > 0 ? checkout : reach;
-                return GestureDetector(
+                return ValueListenableBuilder<bool>(
+                  valueListenable: game.contestNotifier,
+                  builder: (ctx4, contesting, child4) {
+                    return GestureDetector(
                   onTapDown: (_) => game.setInteractHeld(true),
                   onTapUp: (_) => game.setInteractHeld(false),
                   onTapCancel: () => game.setInteractHeld(false),
@@ -499,9 +502,11 @@ class _InteractButton extends StatelessWidget {
                         width: 96,
                         height: 96,
                         decoration: BoxDecoration(
-                          color: active
-                              ? AppTokens.accent
-                              : AppTokens.ink.withValues(alpha: 0.3),
+                          color: contesting
+                              ? AppTokens.danger
+                              : (active
+                                  ? AppTokens.accent
+                                  : AppTokens.ink.withValues(alpha: 0.3)),
                           shape: BoxShape.circle,
                           boxShadow: active ? AppTokens.elev3 : null,
                         ),
@@ -544,6 +549,8 @@ class _InteractButton extends StatelessWidget {
                       ),
                     ],
                   ),
+                );
+                  },
                 );
               },
             );

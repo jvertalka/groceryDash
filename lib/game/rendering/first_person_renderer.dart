@@ -421,6 +421,99 @@ class FirstPersonRenderer {
         );
       }
     }
+
+    // Second pass: speech bubbles. Drawn after sprites so they sit on top,
+    // but still depth-tested against walls so a bubble around a corner
+    // doesn't bleed through.
+    _drawSpeechBubbles(canvas, world, camX, camY, facing, w, horizon, focal);
+  }
+
+  /// Billboarded rounded-rect bubble with a short text line above each
+  /// NPC that's currently speaking.
+  void _drawSpeechBubbles(
+    Canvas canvas,
+    StoreWorld world,
+    double camX,
+    double camY,
+    double facing,
+    double w,
+    double horizon,
+    double focal,
+  ) {
+    final cosA = math.cos(-facing);
+    final sinA = math.sin(-facing);
+    const cameraHeight = 90.0;
+    for (final n in world.npcs) {
+      if (n.consumed || n.dialogue == null) continue;
+      final dx = n.x - camX;
+      final dy = n.y - camY;
+      final rx = dx * cosA - dy * sinA;
+      final ry = dx * sinA + dy * cosA;
+      if (rx <= 1) continue;
+      final screenX = w / 2 + (ry * focal) / rx;
+      // Place bubble a bit above the NPC's head
+      final screenSize = (65 * focal) / rx;
+      final baseY = horizon + (cameraHeight * focal) / rx;
+      final headY = baseY - screenSize * 1.05;
+      final bubbleY = headY - 10;
+      // Depth test: skip if a wall is in front of this bubble column
+      final col = (screenX / _pixelStep).floor();
+      if (col >= 0 && col < _zBuffer.length && rx >= _zBuffer[col]) {
+        continue;
+      }
+      _drawBubble(canvas, Offset(screenX, bubbleY), n.dialogue!,
+          fadeIn: 1.0 - (n.dialogueTimer.clamp(0.0, 0.25) / 0.25));
+    }
+  }
+
+  void _drawBubble(Canvas canvas, Offset anchor, String text,
+      {double fadeIn = 1.0}) {
+    // Lay out the text
+    final builder = ui.ParagraphBuilder(ui.ParagraphStyle(
+      textAlign: TextAlign.center,
+      fontSize: 12,
+      fontWeight: FontWeight.w700,
+    ))
+      ..pushStyle(TextStyle(color: const Color(0xFF231A10)).getTextStyle())
+      ..addText(text);
+    final para = builder.build()..layout(const ui.ParagraphConstraints(width: 180));
+    final textW = math.min(180.0, para.longestLine + 14);
+    final textH = para.height + 8;
+    final rect = Rect.fromCenter(
+      center: anchor,
+      width: textW,
+      height: textH,
+    );
+    final rr = RRect.fromRectAndRadius(rect, const Radius.circular(8));
+    final alpha = fadeIn.clamp(0.0, 1.0);
+    canvas.drawRRect(
+        rr, Paint()..color = Colors.white.withValues(alpha: 0.95 * alpha));
+    canvas.drawRRect(
+      rr,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.6 * alpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+    // Tail
+    final tailPath = Path()
+      ..moveTo(anchor.dx - 4, rect.bottom)
+      ..lineTo(anchor.dx, rect.bottom + 6)
+      ..lineTo(anchor.dx + 4, rect.bottom)
+      ..close();
+    canvas.drawPath(
+        tailPath, Paint()..color = Colors.white.withValues(alpha: 0.95 * alpha));
+    canvas.drawPath(
+      tailPath,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.6 * alpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2,
+    );
+    canvas.drawParagraph(
+      para,
+      Offset(anchor.dx - para.width / 2, rect.top + 3),
+    );
   }
 
   // ----- foreground cart -----

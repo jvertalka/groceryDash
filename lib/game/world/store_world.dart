@@ -40,6 +40,11 @@ class Npc {
   ShelfSlot? occupyingSlot;     // slot they are currently blocking
   ItemDef? stolenItem;          // item they nicked from an unattended cart
 
+  /// Currently visible speech bubble line — drawn as a billboard above the
+  /// NPC when the renderer sees it. Cleared after [dialogueTimer] expires.
+  String? dialogue;
+  double dialogueTimer = 0;
+
   bool get isStunned => state == NpcState.stunned;
   bool get isReaching => state == NpcState.reaching;
   bool get isThieving => state == NpcState.thieving;
@@ -201,6 +206,10 @@ class StoreWorld {
     for (final n in npcs) {
       if (n.consumed) continue;
       n.wobble += dt;
+      if (n.dialogueTimer > 0) {
+        n.dialogueTimer -= dt;
+        if (n.dialogueTimer <= 0) n.dialogue = null;
+      }
       if (n.def.id == 'spill' || n.def.id == 'grapes') continue;
 
       _tickNpc(n, dt, playerX, playerY, unattendedCart);

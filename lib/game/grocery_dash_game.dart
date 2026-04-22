@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -20,6 +21,31 @@ import 'world/shelf.dart';
 import 'world/store_world.dart';
 
 typedef RunEndedCallback = void Function(RunResult result);
+
+/// One-liners NPCs say when you bump them. Variants exist for different
+/// NPC archetypes so a kid sounds different from a grump.
+const Map<String, List<String>> kBumpLines = {
+  'shopper': ['Excuse me!', 'Watch it!', 'Hey!', 'Oof.', 'Rude.'],
+  'stocker': ['Coming through!', 'Careful!', 'Let me work.'],
+  'kid': ['Sorry!', 'Woah!', 'Haha!'],
+  'cart': ['— —!', '…', '(crash)'],
+};
+
+/// Lines NPCs say when they've just stolen an item from the player's cart.
+const List<String> kThiefLines = [
+  'Finders keepers.',
+  'Pardon me.',
+  'Mine now.',
+  'Oops. Taking this.',
+];
+
+/// Lines played when a contest starts — NPC reacts to the player grabbing
+/// for the same shelf slot.
+const List<String> kContestLines = [
+  'Hey, I was here first!',
+  'That\u2019s mine!',
+  'Not so fast.',
+];
 
 /// Shopping-trip game. Player + cart are separate entities. The run is a
 /// shopping list to complete, followed by a checkout. No passive score,
@@ -52,6 +78,8 @@ class GroceryDashGame extends FlameGame {
   /// Fires with the focused slot id (or null) whenever the shelf face the
   /// player is near changes — so the HUD shelf panel can rebuild.
   final ValueNotifier<int> shelfFaceTickNotifier = ValueNotifier(0);
+  /// Non-null while an item contest is in progress.
+  final ValueNotifier<bool> contestNotifier = ValueNotifier(false);
 
   // World + entities — eagerly initialised with placeholders so the HUD
   // (which may build before onLoad completes) can read them safely.
@@ -95,6 +123,7 @@ class GroceryDashGame extends FlameGame {
 
   // Slot interaction
   ShelfSlot? _focusedSlot;
+  Npc? _contestOpponent; // NPC also going for the focused slot
 
   /// All slots on the same shelf face as the currently focused slot. Used
   /// by the HUD shelf-face selector. Groups by matching `facing` sign and
@@ -133,6 +162,9 @@ class GroceryDashGame extends FlameGame {
 
   @override
   Future<void> onLoad() async {
+    // Warm up procedural audio in the background — first play might miss
+    // if the user triggers an action before init completes, but it's cheap.
+    unawaited(GameAudio.instance.init());
     storeWorld = StoreWorld(seed: DateTime.now().millisecondsSinceEpoch);
     storeWorld.populate();
     _grid = GridWorld.fromLayout(storeWorld.layout);
@@ -249,6 +281,18 @@ class GroceryDashGame extends FlameGame {
     player.mode = PlayerMode.reaching;
     player.reachingForItem = slot.item;
     player.reachTimer = 0;
+    // Contests extend the reach to give the NPC a fair chance of "winning"
+    // if the player bails.
+    final contest = _contestOpponent;
+    if (contest != null) {
+      player.reachTotal = 1.7;
+      contestNotifier.value = true;
+      GameAudio.instance.contestOpen();
+      _npcSay(contest, kContestLines, duration: 2.0);
+      _setBanner('Contested! Hold to grab it first.');
+    } else {
+      player.reachTotal = 0.9;
+    }
     reachProgressNotifier.value = 0;
     joystick = Offset.zero;
   }
@@ -323,6 +367,20 @@ class GroceryDashGame extends FlameGame {
     _focusedSlot = found;
     if (changed) {
       shelfFaceTickNotifier.value = shelfFaceTickNotifier.value + 1;
+    }
+    // Contest detection: any NPC whose occupyingSlot is our focused slot
+    _contestOpponent = null;
+    if (found != null) {
+      for (final n in storeWorld.npcs) {
+        if (n.consumed) continue;
+        if (!identical(n.occupyingSlot, found)) continue;
+        if (n.state != NpcState.browsing &&
+            n.state != NpcState.reaching) {
+          continue;
+        }
+        _contestOpponent = n;
+        break;
+      }
     }
 
     // Build prompt notification
@@ -486,12 +544,30 @@ class GroceryDashGame extends FlameGame {
   }
 
   void _cancelReach() {
+    // If we were in a contest and bailed, the NPC takes it: consume the
+    // slot and make the NPC smug about it.
+    if (contestNotifier.value) {
+      final opp = _contestOpponent;
+      final slot = _focusedSlot;
+      if (opp != null && slot != null && !slot.empty) {
+        slot.stock--;
+        opp.occupyingSlot = null;
+        opp.state = NpcState.crossing;
+        opp.target = null;
+        _npcSay(opp, const ['Thanks for the hesitation.', 'Told you.'],
+            duration: 2.0);
+        _setBanner('They grabbed the ${slot.item.name}.');
+      }
+      contestNotifier.value = false;
+    }
     player.mode = cart.state == CartState.attached
         ? PlayerMode.pushing
         : PlayerMode.onFoot;
     player.reachTimer = 0;
     player.reachingForItem = null;
+    player.reachTotal = 0.9;
     reachProgressNotifier.value = 0;
+    _contestOpponent = null;
   }
 
   void _completeReach() {
@@ -501,10 +577,23 @@ class GroceryDashGame extends FlameGame {
       cart.addItem(slot.item);
       list.recount(cart);
       GameAudio.instance.pickupChime();
+      // Won a contest — annoy the NPC and bounce them to a new target.
+      if (contestNotifier.value) {
+        final opp = _contestOpponent;
+        if (opp != null) {
+          opp.occupyingSlot = null;
+          opp.state = NpcState.crossing;
+          opp.target = null;
+          _npcSay(opp, const ['Hmph.', 'Fine.', 'Unbelievable.'],
+              duration: 1.8);
+        }
+      }
       if (list.allComplete) {
         _setBanner('List complete. Head to checkout.');
       }
     }
+    // Clear contest flag explicitly so _cancelReach doesn't think we bailed.
+    contestNotifier.value = false;
     _cancelReach();
   }
 
@@ -551,6 +640,7 @@ class GroceryDashGame extends FlameGame {
         list.recount(cart);
         _itemsStolenByNpcs++;
         GameAudio.instance.thiefWarning();
+        _npcSay(n, kThiefLines, duration: 2.4);
         _setBanner('Someone took your ${item.name}!');
       }
     }
@@ -599,6 +689,8 @@ class GroceryDashGame extends FlameGame {
           n.state = NpcState.stunned;
           n.stateTimer = 0.4;
         }
+        final pool = kBumpLines[n.def.id] ?? kBumpLines['shopper']!;
+        _npcSay(n, pool, duration: 1.4);
         // Slow the player/cart + nudge-slide along the tangent so we don't
         // hard-stop on contact. Decomposes velocity into normal + tangent
         // components and cancels the normal into the NPC.
@@ -692,6 +784,16 @@ class GroceryDashGame extends FlameGame {
     bannerNotifier.value = text;
   }
 
+  /// Make an NPC speak a line from a dialogue pool. Plays a quiet blip as
+  /// feedback. No-op if the NPC is consumed.
+  void _npcSay(Npc n, List<String> pool, {double duration = 2.0}) {
+    if (n.consumed) return;
+    if (pool.isEmpty) return;
+    n.dialogue = pool[_rng().nextInt(pool.length)];
+    n.dialogueTimer = duration;
+    GameAudio.instance.speechBlip();
+  }
+
   // ---- utilities ----
   double _dist(double ax, double ay, double bx, double by) {
     final dx = bx - ax;
@@ -719,6 +821,7 @@ class GroceryDashGame extends FlameGame {
     reachProgressNotifier.dispose();
     checkoutProgressNotifier.dispose();
     shelfFaceTickNotifier.dispose();
+    contestNotifier.dispose();
     super.onRemove();
   }
 }
