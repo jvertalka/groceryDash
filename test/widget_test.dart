@@ -1,3 +1,6 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:grocery_dash/game/data/items.dart';
@@ -7,6 +10,22 @@ import 'package:grocery_dash/game/rendering/emoji_cache.dart';
 import 'package:grocery_dash/game/world/store_world.dart';
 
 void main() {
+  // The procedural fallback builds 64x64 textures (TextureAtlas.kTextureSize).
+  // Real dropped-in art is 256x256, so a 256px decode proves the asset is
+  // actually bundled and wins over the procedural builder.
+  TestWidgetsFlutterBinding.ensureInitialized();
+  for (final slot in const ['wall', 'produceBin', 'counter', 'floor']) {
+    test('real $slot texture asset loads (256px, not procedural fallback)',
+        () async {
+      final data = await rootBundle.load('assets/textures/$slot.png');
+      final codec =
+          await ui.instantiateImageCodec(data.buffer.asUint8List());
+      final frame = await codec.getNextFrame();
+      expect(frame.image.width, 256, reason: '$slot.png should be real art');
+      expect(frame.image.height, 256);
+    });
+  }
+
   test('item ids are unique', () {
     final ids = kItems.map((i) => i.id).toList();
     expect(ids.toSet().length, ids.length);

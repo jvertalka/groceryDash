@@ -37,6 +37,9 @@ class TextureAtlas {
     return _images[kind.name] ?? _images.values.first;
   }
 
+  /// Tiling texture for the floor, sampled by the first-person floor-caster.
+  ui.Image get floorTexture => _images['floor'] ?? _images.values.first;
+
   Future<void> _generate() async {
     // Each texture tries an asset file first; falls back to the procedural
     // builder. Drop `assets/textures/<name>.png` files into the project to
@@ -57,6 +60,32 @@ class TextureAtlas {
       );
     }
     _images['shelf'] = _images['shelf|${kSections.first.id}']!;
+    _images['floor'] = await _loadOrBuild('floor', () => _buildFloor());
+  }
+
+  /// Procedural fallback floor — light speckled tiles with grout, used when
+  /// `assets/textures/floor.png` is absent. Tiles seamlessly.
+  Future<ui.Image> _buildFloor() async {
+    return _render((canvas, size) {
+      canvas.drawRect(Rect.fromLTWH(0, 0, size, size),
+          Paint()..color = const Color(0xFFD9D7CE));
+      // Speckle
+      final rng = math.Random(11);
+      for (var i = 0; i < 240; i++) {
+        canvas.drawCircle(
+          Offset(rng.nextDouble() * size, rng.nextDouble() * size),
+          0.4 + rng.nextDouble() * 0.8,
+          Paint()
+            ..color = Colors.black.withValues(alpha: 0.05 + rng.nextDouble() * 0.08),
+        );
+      }
+      // Grout lines — 2x2 tile grid that wraps at the edges
+      final grout = Paint()..color = const Color(0xFFB3AFA2);
+      for (final g in [0.0, size / 2]) {
+        canvas.drawRect(Rect.fromLTWH(g, 0, 1.5, size), grout);
+        canvas.drawRect(Rect.fromLTWH(0, g, size, 1.5), grout);
+      }
+    });
   }
 
   /// Try to load a texture from `assets/textures/<name>.png`; if the asset

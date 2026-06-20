@@ -61,7 +61,7 @@ class FirstPersonRenderer {
 
   /// Internal render resolution. Lower = faster at the cost of blockiness.
   /// 1.0 = native pixel columns; 2.0 = half the columns stretched.
-  final double _pixelStep = 2.0;
+  final double _pixelStep = 1.0;
 
   /// Persistent Z-buffer (depth per screen column) reused for sprite sort.
   List<double> _zBuffer = [];
@@ -100,16 +100,19 @@ class FirstPersonRenderer {
     final bob = math.sin(_bobPhase * 2) * 4;
     final horizon = h * 0.5 + bob;
 
-    // --- Ceiling + floor backgrounds (flat cheap fill) ---
+    final camX = player.x;
+    final camY = player.y;
+    final facing = player.facing;
+
+    // --- Ceiling + floor backgrounds ---
+    // Cheap gradient fill first (covers the horizon seam + acts as fog colour),
+    // then a perspective-correct tiled floor cast on top.
     _drawSkyAndFloor(canvas, w, h, horizon);
+    _drawFloor(canvas, w, h, horizon, camX, camY, facing);
 
     // --- Raycast walls ---
     final columns = (w / _pixelStep).ceil();
     _zBuffer = List<double>.filled(columns, double.infinity);
-
-    final camX = player.x;
-    final camY = player.y;
-    final facing = player.facing;
     for (var i = 0; i < columns; i++) {
       // Camera-space x in [-1, +1]
       final cx = 2 * (i / columns) - 1;
@@ -214,7 +217,9 @@ class FirstPersonRenderer {
           ],
         ).createShader(Rect.fromLTWH(0, 0, w, horizon)),
     );
-    // Floor — checkered band with perspective falloff
+    // Floor — base gradient fill. The textured floor-cast (see _drawFloor)
+    // is drawn over this; the gradient only shows through at the far horizon
+    // seam and provides the fog colour the cast floor darkens toward.
     canvas.drawRect(
       Rect.fromLTWH(0, horizon, w, h - horizon),
       Paint()
@@ -227,6 +232,99 @@ class FirstPersonRenderer {
           ],
         ).createShader(Rect.fromLTWH(0, horizon, w, h - horizon)),
     );
+  }
+
+  /// Perspective-correct tiled floor. Each thin horizontal strip sits at a
+  /// constant depth, so the texture maps exactly across the row; strips stack
+  /// from the horizon down to the bottom of the screen. Far strips get the
+  /// same distance fog the walls use, so the floor meets the wall bases
+  /// seamlessly. Drawn as one GPU `drawVertices` call with a repeating
+  /// [ui.ImageShader].
+  void _drawFloor(
+    Canvas canvas,
+    double w,
+    double h,
+    double horizon,
+    double camX,
+    double camY,
+    double facing,
+  ) {
+    if (horizon >= h) return;
+    final tex = atlas.floorTexture;
+    final tanHalf = math.tan(_fov / 2);
+    final focal = (w / 2) / tanHalf;
+    const camH = 90.0; // eye height above floor — matches _drawColumn
+
+    // Camera direction + plane (Lode-style). The component of each edge ray
+    // along `dir` is 1, so scaling by a perpendicular depth lands on the floor.
+    final dirX = math.cos(facing);
+    final dirY = math.sin(facing);
+    final planeX = -math.sin(facing) * tanHalf;
+    final planeY = math.cos(facing) * tanHalf;
+    final leftX = dirX - planeX;
+    final leftY = dirY - planeY;
+    final rightX = dirX + planeX;
+    final rightY = dirY + planeY;
+
+    final texScale = tex.width / 96.0; // world px per full texture repeat
+    const strip = 4.0; // screen px per strip band
+
+    double depthAt(double y) => camH * focal / math.max(y - horizon, 0.75);
+    // Gentle distance darkening only — a grocery floor is brightly lit, so it
+    // must never fall to the near-black the walls use. Stays >= 55%.
+    Color fog(double d) {
+      final v = ((1 / (1 + d / 2200)).clamp(0.55, 1.0) * 255).round();
+      return Color.fromARGB(255, v, v, v);
+    }
+
+    final positions = <Offset>[];
+    final texCoords = <Offset>[];
+    final colors = <Color>[];
+
+    for (var y = horizon; y < h; y += strip) {
+      final y0 = math.max(y, horizon + 0.75);
+      final y1 = math.min(y + strip, h);
+      if (y1 <= y0) continue;
+      final d0 = depthAt(y0);
+      final d1 = depthAt(y1);
+
+      final tL0 = Offset((camX + d0 * leftX) * texScale, (camY + d0 * leftY) * texScale);
+      final tR0 = Offset((camX + d0 * rightX) * texScale, (camY + d0 * rightY) * texScale);
+      final tL1 = Offset((camX + d1 * leftX) * texScale, (camY + d1 * leftY) * texScale);
+      final tR1 = Offset((camX + d1 * rightX) * texScale, (camY + d1 * rightY) * texScale);
+
+      final c0 = fog(d0);
+      final c1 = fog(d1);
+      final pTL = Offset(0, y0);
+      final pTR = Offset(w, y0);
+      final pBL = Offset(0, y1);
+      final pBR = Offset(w, y1);
+
+      positions..add(pTL)..add(pTR)..add(pBL);
+      texCoords..add(tL0)..add(tR0)..add(tL1);
+      colors..add(c0)..add(c0)..add(c1);
+
+      positions..add(pTR)..add(pBR)..add(pBL);
+      texCoords..add(tR0)..add(tR1)..add(tL1);
+      colors..add(c0)..add(c1)..add(c1);
+    }
+    if (positions.isEmpty) return;
+
+    final verts = ui.Vertices(
+      ui.VertexMode.triangles,
+      positions,
+      textureCoordinates: texCoords,
+      colors: colors,
+    );
+    final paint = Paint()
+      ..filterQuality = FilterQuality.low
+      ..shader = ui.ImageShader(
+        tex,
+        TileMode.repeated,
+        TileMode.repeated,
+        Matrix4.identity().storage,
+      );
+    canvas.drawVertices(verts, BlendMode.modulate, paint);
   }
 
   // ----- ray march (DDA) -----
@@ -359,7 +457,7 @@ class FirstPersonRenderer {
     final distFog = (1 / (1 + d / 800)).clamp(0.15, 1.0);
     final fade = shade * distFog;
     final paint = Paint()
-      ..filterQuality = FilterQuality.none
+      ..filterQuality = FilterQuality.medium
       ..colorFilter = ColorFilter.mode(
         Color.fromRGBO(0, 0, 0, (1 - fade).clamp(0, 1)),
         BlendMode.darken,
@@ -677,8 +775,8 @@ class FirstPersonRenderer {
       final tintPaint = b.tint != null
           ? (Paint()
             ..colorFilter = ui.ColorFilter.mode(b.tint!, BlendMode.srcATop)
-            ..filterQuality = FilterQuality.none)
-          : (Paint()..filterQuality = FilterQuality.none);
+            ..filterQuality = FilterQuality.medium)
+          : (Paint()..filterQuality = FilterQuality.medium);
       if (b.opacity < 1) {
         tintPaint.color = tintPaint.color
             .withValues(alpha: b.opacity.clamp(0.0, 1.0));
