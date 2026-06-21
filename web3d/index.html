@@ -386,7 +386,7 @@ firstPersonCart();
 // ================================================================ GAME LOGIC
 // Core loop ported from the porting bible: shopping list -> walk up & grab ->
 // score -> checkout. Plus wandering NPC shoppers for life.
-const GAME = { started: false, over: false, score: 0, cart: 0, time: 0, list: [], checkout: null };
+const GAME = { started: false, over: false, score: 0, cart: 0, time: 0, timeLeft: 120, thiefTimer: 16, stolen: 0, list: [], checkout: null };
 
 // --- HUD (DOM) ---
 function hudEl(css) { const d = document.createElement('div'); d.style.cssText = css; document.body.appendChild(d); return d; }
@@ -402,7 +402,10 @@ function renderList() {
   const rows = GAME.list.map(e => { const done = e.got >= e.need; return `<div style="${done ? 'opacity:.5;text-decoration:line-through;' : ''}">${done ? '✓' : '○'} ${e.name} <span style="opacity:.6">${e.got}/${e.need}</span></div>`; }).join('');
   listEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px;letter-spacing:.5px">SHOPPING LIST</div>${rows}`;
 }
-function renderScore() { scoreEl.innerHTML = `Score <b>${GAME.score}</b> · Cart <b>${GAME.cart}</b><br><span style="opacity:.7;font-size:12px">${Math.floor(GAME.time)}s</span>`; }
+function renderScore() {
+  const t = Math.max(0, Math.ceil(GAME.timeLeft));
+  scoreEl.innerHTML = `Score <b>${GAME.score}</b> · Cart <b>${GAME.cart}</b><br><span style="font-size:14px;color:${t <= 15 ? '#ff6b6b' : '#fff'}">⏱ ${t}s</span>`;
+}
 
 // --- shopping list ---
 function genList() {
@@ -462,26 +465,89 @@ function spawnNpc(i) {
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshStandardMaterial({ color: 0xe0b48a, roughness: 0.6 })); head.position.y = 1.42; g.add(head);
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   g.position.copy(randomWalkable()); scene.add(g);
-  npcs.push({ g, target: randomWalkable(), speed: 1.0 + Math.random() * 0.8 });
+  const sp = 1.0 + Math.random() * 0.8;
+  npcs.push({ g, target: randomWalkable(), speed: sp, baseSpeed: sp, state: 'wander', stolen: null });
 }
+const _nd = new THREE.Vector3();
 function updateNpcs(dt) {
   for (const n of npcs) {
-    const pos = n.g.position, d = n.target.clone().sub(pos); d.y = 0;
-    if (d.length() < 0.4) { n.target = randomWalkable(); continue; }
-    d.normalize();
-    const nx = pos.x + d.x * n.speed * dt, nz = pos.z + d.z * n.speed * dt;
+    const pos = n.g.position;
+    const tgt = n.state === 'toThief' ? camera.position : n.target;
+    _nd.copy(tgt).sub(pos); _nd.y = 0;
+    const dist = _nd.length();
+    if (n.state === 'toThief') {
+      if (dist < 1.5) { steal(n); continue; }
+    } else if (n.state === 'flee') {
+      if (dist < 0.7) { // reached the exit corner — escaped with the goods
+        if (n.stolen) { toast('💨 The thief escaped with your ' + n.stolen.name + '.'); n.stolen = null; }
+        n.state = 'wander'; n.speed = n.baseSpeed; n.target = randomWalkable(); continue;
+      }
+    } else { // wander
+      if (dist < 0.4) { n.target = randomWalkable(); continue; }
+    }
+    if (dist < 1e-3) continue;
+    _nd.normalize();
+    const nx = pos.x + _nd.x * n.speed * dt, nz = pos.z + _nd.z * n.speed * dt;
     let moved = false;
     if (!blocked(nx, pos.z)) { pos.x = nx; moved = true; }
     if (!blocked(pos.x, nz)) { pos.z = nz; moved = true; }
-    if (!moved) n.target = randomWalkable();
-    n.g.rotation.y = Math.atan2(d.x, d.z);
+    if (!moved && n.state !== 'toThief') n.target = randomWalkable();
+    n.g.rotation.y = Math.atan2(_nd.x, _nd.z);
   }
+}
+
+// --- thief mechanic (bible §3.4 §4, adapted to first-person) ---
+function pickThief() {
+  const cand = npcs.filter(n => n.state === 'wander');
+  if (cand.length) cand[Math.floor(Math.random() * cand.length)].state = 'toThief';
+}
+function farCorner() {
+  const cs = [new THREE.Vector3(-6, 0, -9), new THREE.Vector3(6, 0, -9), new THREE.Vector3(-6, 0, 9), new THREE.Vector3(6, 0, 9)];
+  let best = cs[0], bd = -1;
+  for (const c of cs) { const d = c.distanceTo(camera.position); if (d > bd) { bd = d; best = c; } }
+  return best;
+}
+function steal(n) {
+  const entry = GAME.list.find(e => e.got > 0);
+  if (!entry) { n.state = 'wander'; n.target = randomWalkable(); return; }
+  entry.got--; GAME.cart = Math.max(0, GAME.cart - 1); GAME.stolen++;
+  n.stolen = entry; n.state = 'flee'; n.speed = 2.5; n.target = farCorner();
+  renderList(); renderScore();
+  toast('🦹 A shopper snatched your ' + entry.name + '! Chase them — press E!');
+}
+function fleeingThiefNear(r) {
+  for (const n of npcs) if (n.state === 'flee' && n.stolen && n.g.position.distanceTo(camera.position) < r) return n;
+  return null;
+}
+function recover(n) {
+  if (!n || !n.stolen) return;
+  const e = n.stolen; e.got++; GAME.cart++; GAME.stolen = Math.max(0, GAME.stolen - 1); GAME.score += 10;
+  n.stolen = null; n.state = 'wander'; n.speed = n.baseSpeed; n.target = randomWalkable();
+  renderList(); renderScore();
+  toast('✓ Got your ' + e.name + ' back! +10');
+}
+
+// --- master per-frame game update ---
+function updateGame(dt) {
+  GAME.time += dt;
+  GAME.timeLeft -= dt;
+  if (GAME.timeLeft <= 0) { GAME.timeLeft = 0; endRun(); return; }
+  GAME.thiefTimer -= dt;
+  if (GAME.thiefTimer <= 0 && GAME.list.some(e => e.got > 0) && !npcs.some(n => n.state !== 'wander')) {
+    pickThief(); GAME.thiefTimer = 16 + Math.random() * 10;
+  }
+  updateNpcs(dt);
+  const close = fleeingThiefNear(0.9); // forgiving auto-catch on contact
+  if (close) recover(close);
+  updateHud(dt);
 }
 
 // --- per-frame HUD + lifecycle ---
 function updateHud(dt) {
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = '0'; }
   renderScore();
+  const thief = fleeingThiefNear(2.4);
+  if (thief) { promptEl.style.display = 'block'; promptEl.textContent = '[E] Catch the thief! (' + thief.stolen.name + ')'; return; }
   if (GAME.checkout && camera.position.distanceTo(GAME.checkout) < 2.5) {
     promptEl.style.display = 'block';
     promptEl.textContent = listComplete() ? '[E] Checkout' : '[E] Checkout (list unfinished)';
@@ -494,28 +560,39 @@ function updateHud(dt) {
 function startGame() {
   if (GAME.started) return;
   GAME.started = true; GAME.over = false; GAME.score = 0; GAME.cart = 0; GAME.time = 0;
+  GAME.timeLeft = 120; GAME.thiefTimer = 16; GAME.stolen = 0;
   GAME.list = genList(); renderList(); renderScore();
   listEl.style.display = 'block'; scoreEl.style.display = 'block';
   for (let i = 0; i < 6; i++) spawnNpc(i);
-  toast('Grab your list with E — then get to CHECKOUT');
+  toast('Grab your list with E — watch for thieves — then CHECKOUT');
 }
 function interact() {
   if (!GAME.started || GAME.over) return;
+  const thief = fleeingThiefNear(1.8);
+  if (thief) { recover(thief); return; }
   if (GAME.checkout && camera.position.distanceTo(GAME.checkout) < 2.5) { endRun(); return; }
   grab(findTarget());
 }
 function endRun() {
   if (GAME.over) return;
   GAME.over = true;
-  const complete = listComplete(), bonus = complete ? 300 : 0; GAME.score += bonus;
+  const timedOut = GAME.timeLeft <= 0;
+  const complete = listComplete();
+  const bonus = complete ? 300 : 0;
+  const timeBonus = Math.floor(Math.max(0, GAME.timeLeft)) * 2;
+  GAME.score += bonus + timeBonus;
+  let best = +(localStorage.getItem('gd_best') || 0);
+  const newBest = GAME.score > best; best = Math.max(best, GAME.score);
+  try { localStorage.setItem('gd_best', best); } catch (e) {}
   if (document.exitPointerLock) document.exitPointerLock();
   promptEl.style.display = 'none';
   endEl.style.display = 'flex';
-  endEl.innerHTML = `<div style="background:rgba(15,18,22,.92);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:28px 36px;text-align:center;max-width:360px">
-    <h1 style="margin:0 0 8px;font-size:24px">Checkout complete</h1>
-    <p style="opacity:.82;margin:4px 0">List items: <b>${GAME.list.filter(e => e.got >= e.need).length}/${GAME.list.length}</b>${complete ? ' · <b>+300</b> bonus' : ''}</p>
-    <p style="opacity:.82;margin:4px 0">Cart: <b>${GAME.cart}</b> · Time: <b>${Math.floor(GAME.time)}s</b></p>
-    <h2 style="margin:14px 0 18px;font-size:30px">Score ${GAME.score}</h2>
+  endEl.innerHTML = `<div style="background:rgba(15,18,22,.92);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:28px 36px;text-align:center;max-width:380px">
+    <h1 style="margin:0 0 8px;font-size:24px">${timedOut ? "Time's up!" : 'Checkout complete'}</h1>
+    <p style="opacity:.82;margin:4px 0">List: <b>${GAME.list.filter(e => e.got >= e.need).length}/${GAME.list.length}</b>${complete ? ' · <b>+300</b>' : ''} · time bonus <b>+${timeBonus}</b></p>
+    <p style="opacity:.82;margin:4px 0">Cart: <b>${GAME.cart}</b> · Stolen: <b>${GAME.stolen}</b></p>
+    <h2 style="margin:14px 0 6px;font-size:30px">Score ${GAME.score}</h2>
+    <p style="opacity:.8;margin:2px 0 16px">${newBest ? '🏆 New best!' : 'Best ' + best}</p>
     <div onclick="location.reload()" style="cursor:pointer;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:9px 16px;display:inline-block">Play again</div>
   </div>`;
 }
@@ -568,7 +645,7 @@ function frame() {
     }
     camera.position.y = 1.62;
   }
-  if (GAME.started && !GAME.over) { GAME.time += dt; updateNpcs(dt); updateHud(dt); }
+  if (GAME.started && !GAME.over) updateGame(dt);
   composer.render();
 }
 frame();
@@ -584,6 +661,7 @@ addEventListener('resize', () => {
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
 window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__endRun = endRun;
+window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
