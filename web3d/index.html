@@ -286,7 +286,7 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
       const p = product(shape, color, name);
       p.position.set(faceX * (depth / 2 - 0.18), by + 0.025, -len / 2 + 0.35 + i * ((len - 0.7) / (n - 1)));
       grp.add(p);
-      shelfItems.push({ id, name, score, mesh: p, grabbed: false,
+      shelfItems.push({ id, name, score, shape, color, mesh: p, grabbed: false,
         pos: new THREE.Vector3(cx + p.position.x, p.position.y, cz + p.position.z) });
     }
   }
@@ -366,6 +366,8 @@ function cart() {
 cart();
 
 // first-person cart pushed ahead of the camera (child of the camera)
+let cartHold = null;   // group inside the FP cart that holds collected mini-items
+const cartMinis = [];  // the mini meshes currently shown in the cart
 function firstPersonCart() {
   const g = new THREE.Group();
   const basket = new THREE.Mesh(
@@ -378,6 +380,7 @@ function firstPersonCart() {
   const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.6, 10), frameMat);
   handle.rotation.z = Math.PI / 2; handle.position.set(0, -0.4, -0.62);
   g.add(basket, rim, handle);
+  cartHold = new THREE.Group(); cartHold.position.set(0, -0.74, -1.0); g.add(cartHold);
   g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
   camera.add(g);
 }
@@ -445,9 +448,23 @@ function findTarget() {
   }
   return best;
 }
+// --- visible cart contents ---
+function addCartMini(shape, color, name) {
+  if (!cartHold) return;
+  const mini = product(shape, color, name);
+  mini.scale.setScalar(0.32);
+  mini.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+  const n = cartMinis.length, col = n % 3, row = Math.floor(n / 3) % 2, layer = Math.floor(n / 6);
+  mini.position.set(-0.16 + col * 0.16, layer * 0.14, -0.1 + row * 0.2);
+  cartHold.add(mini); cartMinis.push(mini);
+}
+function removeCartMini() { const m = cartMinis.pop(); if (m && cartHold) cartHold.remove(m); }
+function clearCart() { for (const m of cartMinis) if (cartHold) cartHold.remove(m); cartMinis.length = 0; }
+
 function grab(it) {
   if (!it || it.grabbed) return;
   it.grabbed = true; it.mesh.visible = false; GAME.cart++;
+  addCartMini(it.shape, it.color, it.name);
   const entry = GAME.list.find(e => e.id === it.id && e.got < e.need);
   let pts = it.score; if (entry) { entry.got++; pts += 5; }
   GAME.score += pts; toast('+' + pts + '  ' + it.name + (entry ? '  ✓' : ''));
@@ -524,7 +541,7 @@ function farCorner() {
 function steal(n) {
   const entry = GAME.list.find(e => e.got > 0);
   if (!entry) { n.state = 'wander'; n.target = randomWalkable(); return; }
-  entry.got--; GAME.cart = Math.max(0, GAME.cart - 1); GAME.stolen++;
+  entry.got--; GAME.cart = Math.max(0, GAME.cart - 1); GAME.stolen++; removeCartMini();
   n.stolen = entry; n.state = 'flee'; n.speed = 2.4 + GAME.round * 0.2; n.target = farCorner();
   renderList(); renderScore();
   toast('🦹 A shopper snatched your ' + entry.name + '! Chase them — press E!');
@@ -536,6 +553,7 @@ function fleeingThiefNear(r) {
 function recover(n) {
   if (!n || !n.stolen) return;
   const e = n.stolen; e.got++; GAME.cart++; GAME.stolen = Math.max(0, GAME.stolen - 1); GAME.score += 10;
+  const def = ITEMS.find(t => t[3] === e.id); if (def) addCartMini(def[0], def[1], def[2]);
   n.stolen = null; n.state = 'wander'; n.speed = n.baseSpeed; n.target = randomWalkable();
   renderList(); renderScore();
   toast('✓ Got your ' + e.name + ' back! +10');
@@ -605,6 +623,7 @@ function advanceRound() {
   GAME.score += 300 + timeBonus;
   const cleared = GAME.round;
   GAME.round++;
+  clearCart(); GAME.cart = 0; // bagged at checkout — cart starts empty next round
   GAME.list = genList(); renderList();
   GAME.timeLeft = roundTime(GAME.round);
   GAME.thiefTimer = thiefInterval();
@@ -695,7 +714,7 @@ addEventListener('resize', () => {
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
 window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__advanceRound = advanceRound; window.__gameOver = gameOver; window.__nearestNeeded = nearestNeeded;
-window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear;
+window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
