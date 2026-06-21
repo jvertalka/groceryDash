@@ -4,6 +4,7 @@ import 'dart:ui';
 
 import 'package:flame/game.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'data/carts.dart';
 import 'data/items.dart';
@@ -264,7 +265,11 @@ class GroceryDashGame extends FlameGame {
     list.dispose();
     list = ShoppingList(entries);
     list.addListener(_syncListNotifiers);
-    _syncListNotifiers();
+    // onLoad runs inside Flame's loaderFuture during a widget build, so writing
+    // the HUD ValueNotifiers synchronously here throws "setState during build".
+    // Defer the first sync to after the frame; later (gameplay) syncs run on
+    // the Flame ticker, not during build, so they stay immediate.
+    SchedulerBinding.instance.addPostFrameCallback((_) => _syncListNotifiers());
 
     _worldReady = true;
   }
