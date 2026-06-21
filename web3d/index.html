@@ -167,10 +167,10 @@ for (const xi of [-6, -2, 2, 6]) {
 // Sampled from the game's item catalogue (id → shape + colour).
 // [shape, colour, label, id, score]
 const ITEMS = [
-  ['box', 0xE0B040, 'CEREAL', 'cereal', 5], ['box', 0xE86A92, 'CANDY', 'candy', 5], ['box', 0xD2690E, 'PIZZA', 'pizza', 7], ['carton', 0xF2F2F2, 'MILK', 'milk', 5],
+  ['box', 0xE0B040, 'CEREAL', 'cereal', 5], ['box', 0xE86A92, 'CANDY', 'candy', 5], ['pizza', 0xD2690E, 'PIZZA', 'pizza', 7], ['carton', 0xF2F2F2, 'MILK', 'milk', 5],
   ['carton', 0xE89B3C, 'JUICE', 'oj', 6], ['can', 0xB03A48, 'SOUP', 'soup', 5], ['can', 0x4FB477, 'BEANS', 'beans', 5], ['bottle', 0x8B3A3A, 'COLA', 'soda', 5],
-  ['bottle', 0x6BB3E8, 'WATER', 'water', 5], ['bag', 0xE5C07B, 'CHIPS', 'chips', 5], ['bag', 0xD9A066, 'BREAD', 'bread', 5], ['produce', 0xD64545, 'APPLE', 'apple', 5],
-  ['produce', 0xE8C547, 'BANANA', 'banana', 5], ['wedge', 0xE8B64C, 'CHEESE', 'cheese', 6], ['round', 0xF6B5CC, 'CAKE', 'cake', 20], ['bag', 0xEFEFEF, 'RICE', 'rice', 5],
+  ['bottle', 0x6BB3E8, 'WATER', 'water', 5], ['bag', 0xE5C07B, 'CHIPS', 'chips', 5], ['bag', 0xD9A066, 'BREAD', 'bread', 5], ['apple', 0xD64545, 'APPLE', 'apple', 5],
+  ['banana', 0xE8C547, 'BANANA', 'banana', 5], ['wedge', 0xE8B64C, 'CHEESE', 'cheese', 6], ['round', 0xF6B5CC, 'CAKE', 'cake', 20], ['bag', 0xEFEFEF, 'RICE', 'rice', 5],
   ['carton', 0xF5ECD7, 'EGGS', 'eggs', 8], ['box', 0xF5F5F5, 'TISSUES', 'tissues', 5], ['bag', 0xF4E1A1, 'POPCORN', 'popcorn', 5], ['bottle', 0xE8B104, 'MUSTARD', 'mustard', 5],
   ['can', 0x4FB477, 'ENERGY', 'energy', 7], ['can', 0xC0392B, 'SALSA', 'salsa', 6], ['can', 0xDFA95A, 'RAMEN', 'ramen', 6], ['tray', 0xA83A3A, 'BEEF', 'beef', 7],
   ['tray', 0xC47650, 'HOT DOGS', 'hotdog', 6], ['tray', 0xF8D6CE, 'ICE CREAM', 'icecream', 7],
@@ -243,12 +243,29 @@ function product(shape, color, name) {
   } else if (shape === 'produce') {
     const b = new THREE.Mesh(new THREE.SphereGeometry(0.12, 20, 16), mat(color, { roughness: 0.5 }));
     b.position.y = 0.12; g.add(b);
+  } else if (shape === 'apple') {
+    const a = new THREE.Mesh(new THREE.SphereGeometry(0.13, 20, 16), mat(color, { roughness: 0.4 }));
+    a.scale.y = 0.92; a.position.y = 0.13; g.add(a);
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.07, 6), mat(0x6b4a2a));
+    stem.position.y = 0.27; g.add(stem);
+    const leaf = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 6), mat(0x4AA35A));
+    leaf.scale.set(1.4, 0.35, 0.8); leaf.position.set(0.055, 0.27, 0); g.add(leaf);
+  } else if (shape === 'banana') {
+    const bn = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.042, 10, 16, Math.PI * 0.9), mat(color, { roughness: 0.55 }));
+    bn.rotation.z = Math.PI * 0.2; bn.position.y = 0.17; g.add(bn);
   } else if (shape === 'wedge') {
     const b = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.18, 3), mat(color));
     b.position.y = 0.10; b.rotation.y = Math.PI / 6; g.add(b);
   } else if (shape === 'round') {
     const b = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.14, 28), mat(color));
     b.position.y = 0.07; g.add(b);
+  } else if (shape === 'pizza') {
+    // round pie standing up, circular faces along x so it reads as a pizza
+    const crust = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 24), mat(0xD9A066, { roughness: 0.85 }));
+    crust.rotation.z = Math.PI / 2; crust.position.y = 0.2; g.add(crust);
+    const sauce = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.055, 24), mat(0xC0392B, { roughness: 0.7 }));
+    sauce.rotation.z = Math.PI / 2; sauce.position.set(0.002, 0.2, 0); g.add(sauce);
+    for (let k = 0; k < 5; k++) { const a = k / 5 * Math.PI * 2; const dot = new THREE.Mesh(new THREE.SphereGeometry(0.022, 6, 5), mat(0xE8B64C)); dot.position.set(0.03, 0.2 + Math.sin(a) * 0.1, Math.cos(a) * 0.1); g.add(dot); }
   } else if (shape === 'tray') {
     const tr = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.26), mat(color));
     tr.position.y = 0.06;
@@ -260,6 +277,31 @@ function product(shape, color, name) {
 }
 
 // ---------------------------------------------------------------- shelving
+// Logical aisle sections — each shelf unit is stocked from one section's items
+// (matches the bible's grouping) and labelled with a matching sign.
+const SECTIONS = [
+  { name: 'PRODUCE',   color: 0xB7D8A3, items: ['apple', 'banana'] },
+  { name: 'BAKERY',    color: 0xD9A066, items: ['bread', 'cake', 'cereal'] },
+  { name: 'DAIRY',     color: 0xCBE3EF, items: ['milk', 'eggs', 'cheese', 'oj'] },
+  { name: 'DELI',      color: 0xE8C06D, items: ['beef', 'hotdog', 'cheese'] },
+  { name: 'FROZEN',    color: 0x9BC4DA, items: ['pizza', 'icecream', 'ramen'] },
+  { name: 'SNACKS',    color: 0xE5B04A, items: ['chips', 'candy', 'soda', 'popcorn', 'energy'] },
+  { name: 'PANTRY',    color: 0xCBB994, items: ['soup', 'beans', 'salsa', 'rice'] },
+  { name: 'HOUSEHOLD', color: 0xB0ABA0, items: ['tissues', 'water', 'mustard'] },
+];
+const itemDef = id => ITEMS.find(t => t[3] === id);
+function makeSectionSign(text, color) {
+  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0'); ctx.fillRect(0, 0, 512, 128);
+  ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillRect(0, 0, 512, 8); ctx.fillRect(0, 120, 512, 8);
+  ctx.fillStyle = '#1c2126'; ctx.font = 'bold 64px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 256, 70);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1.8, 0.45),
+    new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.35, roughness: 0.7, side: THREE.DoubleSide }));
+  m.castShadow = false; return m;
+}
 const frameMat = new THREE.MeshStandardMaterial({ color: 0x57606b, roughness: 0.4, metalness: 0.6 });
 const boardMat = new THREE.MeshStandardMaterial({ color: 0xb9bec4, roughness: 0.7, metalness: 0.2 });
 
@@ -269,13 +311,13 @@ const shelfBoxes = []; // AABBs for collision (xz)
 const shelfItems = []; // grabbable products: { id, name, score, mesh, pos, grabbed }
 let _prodIdx = 0;      // global cursor so every item type gets placed evenly
 
-function shelfUnit(cx, cz, faceX, sectionColor) {
+function shelfUnit(cx, cz, faceX, section) {
   // A unit is long along Z (length ~4.4), depth ~0.8 along X, faces +/-X (aisle).
   const grp = new THREE.Group();
   const len = 4.4, depth = 0.8, height = 2.0;
 
   const back = new THREE.Mesh(new THREE.BoxGeometry(0.08, height, len),
-    new THREE.MeshStandardMaterial({ color: sectionColor, roughness: 0.85 }));
+    new THREE.MeshStandardMaterial({ color: section.color, roughness: 0.85 }));
   back.position.set(-faceX * depth / 2, height / 2, 0); grp.add(back);
 
   // uprights
@@ -283,15 +325,16 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
     const post = new THREE.Mesh(new THREE.BoxGeometry(depth, height, 0.08), frameMat);
     post.position.set(0, height / 2, zz); grp.add(post);
   }
-  // boards + products
+  // boards + products, stocked from this section's item pool
   const boardYs = [0.45, 1.0, 1.55];
+  let k = 0;
   for (const by of boardYs) {
     const board = new THREE.Mesh(new THREE.BoxGeometry(depth, 0.05, len), boardMat);
     board.position.set(0, by, 0); grp.add(board);
     const n = 6;
     for (let i = 0; i < n; i++) {
-      const idx = _prodIdx++ % ITEMS.length;
-      const [shape, color, name, id, score] = ITEMS[idx];
+      const id = section.items[k++ % section.items.length];
+      const [shape, color, name, , score] = itemDef(id);
       const p = product(shape, color, name);
       p.position.set(faceX * (depth / 2 - 0.18), by + 0.025, -len / 2 + 0.35 + i * ((len - 0.7) / (n - 1)));
       grp.add(p);
@@ -299,7 +342,13 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
         pos: new THREE.Vector3(cx + p.position.x, p.position.y, cz + p.position.z) });
     }
   }
-  grp.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  // section sign hanging in the aisle, facing out toward the shopper
+  const sign = makeSectionSign(section.name, section.color);
+  sign.position.set(faceX * (depth / 2 + 0.45), height - 0.1, 0);
+  sign.rotation.y = faceX > 0 ? Math.PI / 2 : -Math.PI / 2;
+  grp.add(sign);
+
+  grp.traverse(o => { if (o.isMesh) { o.receiveShadow = true; if (o !== sign) o.castShadow = true; } });
   grp.position.set(cx, 0, cz);
   scene.add(grp);
   shelfBoxes.push({ minX: cx - depth / 2 - 0.1, maxX: cx + depth / 2 + 0.1, minZ: cz - len / 2, maxZ: cz + len / 2 });
@@ -315,30 +364,10 @@ const ROWS = [
 const SEG_Z = [-7, -2.5, 2];
 let _sec = 0;
 for (const r of ROWS) for (const cz of SEG_Z) {
-  shelfUnit(r.x, cz, r.face, SECTION_COLORS[_sec % SECTION_COLORS.length]); _sec++;
+  shelfUnit(r.x, cz, r.face, SECTIONS[_sec % SECTIONS.length]); _sec++;
 }
 
-// hanging, softly-lit aisle signs over the central aisle
-function aisleSign(text, color, x, z) {
-  const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
-  const ctx = cv.getContext('2d');
-  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0'); ctx.fillRect(0, 0, 512, 128);
-  ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(0, 0, 512, 9); ctx.fillRect(0, 119, 512, 9);
-  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 70px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, 256, 70);
-  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
-  const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.55),
-    new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.35, roughness: 0.7, side: THREE.DoubleSide }));
-  sign.position.set(x, STORE.h - 0.8, z); scene.add(sign);
-  for (const dx of [-0.95, 0.95]) {
-    const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.5, 6), frameMat);
-    cable.position.set(x + dx, STORE.h - 0.52, z); scene.add(cable);
-  }
-}
-aisleSign('PRODUCE', 0x4AA35A, -4.25, -6);
-aisleSign('DAIRY', 0x3D8AB0, -4.25, 1);
-aisleSign('SNACKS', 0xE5B04A, 4.25, -6);
-aisleSign('HOUSEHOLD', 0x8A7E60, 4.25, 1);
+// (section signs are now hung per shelf unit inside shelfUnit)
 
 // storefront entrance on the south wall (behind the spawn — turn around to see it)
 (function entrance() {
