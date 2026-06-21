@@ -327,6 +327,7 @@ const SECTION_COLORS = [0xB7D8A3, 0xD9A066, 0xCBE3EF, 0xE5B04A, 0xB0ABA0, 0x9BC4
 const shelfBoxes = []; // AABBs for collision (xz)
 const shelfItems = []; // grabbable products: { id, name, score, mesh, pos, grabbed }
 let _prodIdx = 0;      // global cursor so every item type gets placed evenly
+const frozenZones = []; // centres of frozen units (slippery floor)
 
 function shelfUnit(cx, cz, faceX, section) {
   // A unit is long along Z (length ~4.4), depth ~0.8 along X, faces +/-X (aisle).
@@ -385,6 +386,7 @@ function shelfUnit(cx, cz, faceX, section) {
   grp.position.set(cx, 0, cz);
   scene.add(grp);
   shelfBoxes.push({ minX: cx - depth / 2 - 0.1, maxX: cx + depth / 2 + 0.1, minZ: cz - len / 2, maxZ: cz + len / 2 });
+  if (section.name === 'FROZEN') frozenZones.push({ x: cx, z: cz });
 }
 
 // Two rows flanking a central aisle; three sections deep on each side.
@@ -406,12 +408,14 @@ for (const r of ROWS) for (const cz of SEG_Z) {
 // (section signs are now hung per shelf unit inside shelfUnit)
 
 // storefront entrance on the south wall (behind the spawn — turn around to see it)
+let entranceDoors = [], entranceZ = 0;
 (function entrance() {
-  const fz = STORE.d / 2 - 0.06;
+  const fz = STORE.d / 2 - 0.06; entranceZ = fz;
   const glass = new THREE.MeshStandardMaterial({ color: 0xbfe0ee, transparent: true, opacity: 0.3, roughness: 0.08, metalness: 0.1, side: THREE.DoubleSide });
   for (const dx of [-0.95, 0.95]) {
     const door = new THREE.Mesh(new THREE.BoxGeometry(1.8, 2.4, 0.05), glass);
     door.position.set(dx, 1.2, fz); scene.add(door);
+    entranceDoors.push({ mesh: door, closed: dx, open: dx * 2.1 });
   }
   const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.5, 0.1), frameMat);
   mullion.position.set(0, 1.25, fz); scene.add(mullion);
@@ -571,7 +575,7 @@ function grab(it) {
     else {
       it.grabbed = true;
       spawnFlyer(it.mesh, detach(it), () => rival.g.position.clone().setY(1.0), null, 1);
-      rival.target = it.pos.clone();
+      rival.target = it.pos.clone(); showEmote(rival, 'Mine!');
       toast('🛒 A shopper grabbed the ' + it.name + ' first!');
       return;
     }
@@ -621,9 +625,9 @@ const npcs = [];
 const NPC_SHIRTS = [0xC0392B, 0x2E86C1, 0x27AE60, 0x8E44AD, 0xE67E22, 0x16A085];
 const BUMP_LINES = ['Excuse me!', 'Hey!', 'Watch it!', 'Rude!', 'Oof!', 'Mind the cart!'];
 function randomWalkable() { for (let i = 0; i < 40; i++) { const x = (Math.random() * 2 - 1) * 8.0, z = (Math.random() * 2 - 1) * 10.0; if (!blocked(x, z)) return new THREE.Vector3(x, 0, z); } return new THREE.Vector3(0, 0, 0); }
-function spawnNpc(i) {
+function spawnNpc(i, staff) {
   const g = new THREE.Group();
-  const shirt = NPC_SHIRTS[i % NPC_SHIRTS.length];
+  const shirt = staff ? 0x2e7d32 : NPC_SHIRTS[i % NPC_SHIRTS.length];
   const bodyMat = new THREE.MeshStandardMaterial({ color: shirt, roughness: 0.78 });
   const skinMat = new THREE.MeshStandardMaterial({ color: 0xe0b48a, roughness: 0.6 });
   const legMat = new THREE.MeshStandardMaterial({ color: 0x39414b, roughness: 0.85 });
@@ -634,22 +638,37 @@ function spawnNpc(i) {
   const mkArm = side => { const a = new THREE.Group(); const m = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.038, 0.46, 8), bodyMat); m.position.y = -0.23; a.add(m); a.position.set(side * 0.24, 1.2, 0); return a; };
   const armL = mkArm(-1), armR = mkArm(1);
   upper.add(torso, head, armL, armR);
+  if (staff) { const cap = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.08, 0.32), new THREE.MeshStandardMaterial({ color: 0x1b5e20 })); cap.position.y = 1.59; upper.add(cap); }
   // legs (swing from the hip)
   const mkLeg = side => { const l = new THREE.Group(); const m = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.05, 0.62, 8), legMat); m.position.y = -0.31; l.add(m); l.position.set(side * 0.09, 0.64, 0); return l; };
   const legL = mkLeg(-1), legR = mkLeg(1);
   // thief marker (hidden until this shopper turns thief)
   const marker = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.2, 4), new THREE.MeshStandardMaterial({ color: 0xff3b30, emissive: 0xff0000, emissiveIntensity: 0.7 }));
   marker.position.y = 1.95; marker.rotation.x = Math.PI; marker.visible = false;
-  g.add(upper, legL, legR, marker);
+  // speech-bubble emote billboard
+  const emoteCanvas = document.createElement('canvas'); emoteCanvas.width = 128; emoteCanvas.height = 64;
+  const emoteTex = new THREE.CanvasTexture(emoteCanvas); emoteTex.colorSpace = THREE.SRGBColorSpace;
+  const emote = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 0.25), new THREE.MeshBasicMaterial({ map: emoteTex, transparent: true }));
+  emote.position.y = 2.05; emote.visible = false;
+  g.add(upper, legL, legR, marker, emote);
   g.traverse(o => { if (o.isMesh) o.castShadow = true; });
   g.position.copy(randomWalkable()); scene.add(g);
   const sp = 1.0 + Math.random() * 0.8;
-  npcs.push({ g, upper, bodyMat, shirt, legL, legR, armL, armR, marker, target: randomWalkable(), speed: sp, baseSpeed: sp, state: 'wander', stolen: null, walk: Math.random() * 6, stun: 0, vx: 0, vz: 0 });
+  npcs.push({ g, upper, bodyMat, shirt, legL, legR, armL, armR, marker, emote, emoteCanvas, emoteTex, emoteT: 0, target: randomWalkable(), speed: sp, baseSpeed: sp, state: 'wander', stolen: null, walk: Math.random() * 6, stun: 0, vx: 0, vz: 0, stocker: !!staff, restock: 0 });
+}
+function showEmote(n, text) {
+  const c = n.emoteCanvas, x = c.getContext('2d');
+  x.clearRect(0, 0, 128, 64);
+  x.fillStyle = 'rgba(255,255,255,0.95)'; x.fillRect(8, 6, 112, 42);
+  x.fillStyle = '#c0392b'; x.font = 'bold 28px system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(text, 64, 27);
+  n.emoteTex.needsUpdate = true; n.emote.visible = true; n.emoteT = 1.6;
 }
 const _nd = new THREE.Vector3();
 function updateNpcs(dt) {
   for (const n of npcs) {
     const pos = n.g.position;
+    if (n.emoteT > 0) { n.emoteT -= dt; n.emote.lookAt(camera.position); if (n.emoteT <= 0) n.emote.visible = false; }
     if (n.stun > 0) { // knocked back from a bump — stumble, don't pursue
       n.stun -= dt;
       const px = pos.x + n.vx * dt, pz = pos.z + n.vz * dt;
@@ -658,6 +677,12 @@ function updateNpcs(dt) {
       n.g.rotation.z = Math.sin(n.stun * 28) * 0.25;
       continue;
     } else if (n.g.rotation.z) n.g.rotation.z = 0;
+    if (n.restock > 0) { // stocker reaching at a shelf
+      n.restock -= dt;
+      n.armR.rotation.x = -1.3 + Math.sin(n.restock * 9) * 0.5;
+      if (n.restock <= 0) { n.armR.rotation.x = 0; n.target = randomWalkable(); }
+      continue;
+    }
     const tgt = n.state === 'toThief' ? camera.position : n.target;
     _nd.copy(tgt).sub(pos); _nd.y = 0;
     const dist = _nd.length();
@@ -669,7 +694,7 @@ function updateNpcs(dt) {
         n.state = 'wander'; setThiefLook(n, false); n.speed = n.baseSpeed; n.target = randomWalkable(); continue;
       }
     } else { // wander
-      if (dist < 0.4) { n.target = randomWalkable(); continue; }
+      if (dist < 0.4) { if (n.stocker) n.restock = 2.5; else n.target = randomWalkable(); continue; }
     }
     if (dist < 1e-3) continue;
     _nd.normalize();
@@ -785,6 +810,7 @@ function startGame() {
   GAME.list = genList(); renderList(); renderScore();
   listEl.style.display = 'block'; scoreEl.style.display = 'block';
   for (let i = 0; i < 9; i++) spawnNpc(i);
+  spawnNpc(9, true); // a green-aproned stocker who restocks shelves
   toast('Grab your list with E — watch for thieves — then CHECKOUT');
 }
 function dropSplat(id, pos) {
@@ -902,6 +928,13 @@ const clock = new THREE.Clock();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 let _bob = 0; // head-bob phase
 let _shake = 0; // camera impact shake
+let _crashCd = 0; // cooldown so the shelf-crash tip doesn't spam
+let pvx = 0, pvz = 0; // player velocity (for ice slide)
+let onIce = false;
+const frostEl = document.createElement('div');
+frostEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2;background:radial-gradient(circle at 50% 50%,transparent 36%,rgba(150,205,235,.30));opacity:0;transition:opacity .3s;';
+document.body.appendChild(frostEl);
+function nearFrozen() { for (const z of frozenZones) { const dx = camera.position.x - z.x, dz = camera.position.z - z.z; if (dx * dx + dz * dz < 9) return true; } return false; }
 
 // Render on demand: one frame on any change, and a continuous loop only while
 // the pointer is locked (so the page goes idle when static — lets screenshot
@@ -919,15 +952,23 @@ function frame() {
     if (keys['KeyD'] || keys['ArrowRight']) mx += 1;
     if (keys['KeyA'] || keys['ArrowLeft']) mx -= 1;
     const moving = !!(mx || mz);
-    if (moving) {
-      const dir = new THREE.Vector3().addScaledVector(fwd, mz).addScaledVector(right, mx).normalize();
-      const p = camera.position;
-      const nx = p.x + dir.x * SPEED * dt, nz = p.z + dir.z * SPEED * dt;
-      if (!blocked(nx, p.z)) p.x = nx;
-      if (!blocked(p.x, nz)) p.z = nz;
-      _bob += dt * 11;
-    }
-    camera.position.y = 1.62 + (moving ? Math.sin(_bob) * 0.035 : 0) + (_shake > 0 ? (Math.random() - 0.5) * _shake * 0.14 : 0); // bob + impact shake
+    const dir = moving ? new THREE.Vector3().addScaledVector(fwd, mz).addScaledVector(right, mx).normalize() : null;
+    const p = camera.position;
+    onIce = nearFrozen();
+    if (onIce) { // slidey: accumulate velocity, low friction
+      if (dir) { pvx += dir.x * 14 * dt; pvz += dir.z * 14 * dt; }
+      const k = Math.min(1, 1.2 * dt); pvx -= pvx * k; pvz -= pvz * k;
+      const sp = Math.hypot(pvx, pvz), mxs = SPEED * 1.12; if (sp > mxs) { pvx = pvx / sp * mxs; pvz = pvz / sp * mxs; }
+    } else { pvx = dir ? dir.x * SPEED : 0; pvz = dir ? dir.z * SPEED : 0; }
+    let crashed = false;
+    const nx = p.x + pvx * dt, nz = p.z + pvz * dt;
+    if (!blocked(nx, p.z)) p.x = nx; else { if (Math.abs(pvx) > SPEED * 0.55) crashed = true; pvx = 0; }
+    if (!blocked(p.x, nz)) p.z = nz; else { if (Math.abs(pvz) > SPEED * 0.55) crashed = true; pvz = 0; }
+    const speed2 = pvx * pvx + pvz * pvz;
+    if (moving || speed2 > 0.04) _bob += dt * 11;
+    if (crashed && _crashCd <= 0) { _crashCd = 1.1; _shake = 0.35; if (fpCart) fpCart.rotation.z = (Math.random() < 0.5 ? 1 : -1) * 0.22; toast('🛒💥 Mind the shelf!'); }
+    frostEl.style.opacity = onIce ? '1' : '0';
+    camera.position.y = 1.62 + ((moving || speed2 > 0.04) ? Math.sin(_bob) * 0.035 : 0) + (_shake > 0 ? (Math.random() - 0.5) * _shake * 0.14 : 0); // bob + impact shake
     // shove shoppers you walk into
     if (GAME.started && !GAME.over) {
       for (const n of npcs) {
@@ -936,7 +977,7 @@ function frame() {
         if (d2 < 0.64 && n.stun <= 0) {
           const d = Math.sqrt(d2) || 1; n.vx = dx / d * 4.5; n.vz = dz / d * 4.5; n.stun = 0.7;
           if (n.state === 'wander') n.target = randomWalkable();
-          _shake = 0.3; toast(BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]);
+          _shake = 0.3; toast(BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]); showEmote(n, '!');
           // a hard bump can smash a fragile item out of your cart
           if (cartFragiles.length && Math.random() < 0.5) {
             const f = cartFragiles.pop();
@@ -951,7 +992,13 @@ function frame() {
     }
   }
   if (_shake > 0) _shake = Math.max(0, _shake - dt);
-  if (fpCart) fpCart.position.y += (0 - fpCart.position.y) * Math.min(1, dt * 12); // recoil settle
+  if (_crashCd > 0) _crashCd -= dt;
+  if (fpCart) { fpCart.position.y += (0 - fpCart.position.y) * Math.min(1, dt * 12); fpCart.rotation.z += (0 - fpCart.rotation.z) * Math.min(1, dt * 6); } // recoil + tip settle
+  // automatic sliding entrance doors
+  if (entranceDoors.length) {
+    const open = Math.hypot(camera.position.x, camera.position.z - entranceZ) < 3.6;
+    for (const d of entranceDoors) { const tx = open ? d.open : d.closed; d.mesh.position.x += (tx - d.mesh.position.x) * Math.min(1, dt * 5); }
+  }
   updateFlyers(dt);
   // pause when the pointer is released (Esc) or during a checkout scan
   if (GAME.started && !GAME.over && !GAME.scanning && controls.isLocked) updateGame(dt);
@@ -970,7 +1017,7 @@ addEventListener('resize', () => {
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
 window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__advanceRound = advanceRound; window.__gameOver = gameOver; window.__nearestNeeded = nearestNeeded;
-window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark; window.__doCheckout = doCheckout; window.__cartFragiles = cartFragiles;
+window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark; window.__doCheckout = doCheckout; window.__cartFragiles = cartFragiles; window.__frozenZones = frozenZones; window.__entranceDoors = entranceDoors; window.__nearFrozen = nearFrozen; window.__showEmote = showEmote;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
