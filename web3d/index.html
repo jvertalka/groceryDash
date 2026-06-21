@@ -449,7 +449,8 @@ cart();
 let cartHold = null;   // group inside the FP cart that holds collected mini-items
 let fpCart = null;     // the FP cart group (for recoil juice)
 const cartMinis = [];  // the mini meshes currently shown in the cart
-const flyers = [];     // products mid-flight from shelf -> cart
+const flyers = [];     // products mid-flight (shelf->cart, cart->thief, thief->cart, etc.)
+const cartFragiles = []; // fragile items (eggs/cake) currently in the cart
 function firstPersonCart() {
   const g = new THREE.Group();
   const basket = new THREE.Mesh(
@@ -472,7 +473,7 @@ firstPersonCart();
 // ================================================================ GAME LOGIC
 // Core loop ported from the porting bible: shopping list -> walk up & grab ->
 // score -> checkout. Plus wandering NPC shoppers for life.
-const GAME = { started: false, over: false, score: 0, cart: 0, time: 0, timeLeft: 120, thiefTimer: 16, stolen: 0, round: 1, parked: false, parkedPos: null, list: [], checkout: null };
+const GAME = { started: false, over: false, score: 0, cart: 0, time: 0, timeLeft: 120, thiefTimer: 16, stolen: 0, round: 1, parked: false, parkedPos: null, scanning: false, list: [], checkout: null };
 let parkedCart = null; // 3D cart left in the aisle while on foot
 
 // --- HUD (DOM) ---
@@ -483,6 +484,7 @@ const scoreEl = hudEl(HUDBASE + 'right:14px;top:14px;text-align:right;font-size:
 const promptEl = hudEl(HUDBASE + 'left:50%;bottom:88px;transform:translateX(-50%);background:rgba(15,18,22,.72);border-radius:8px;padding:8px 14px;display:none;');
 const toastEl = hudEl(HUDBASE + 'left:50%;top:17%;transform:translateX(-50%);font-size:20px;font-weight:600;opacity:0;transition:opacity .25s;pointer-events:none;');
 const compassEl = hudEl(HUDBASE + 'left:50%;top:50px;transform:translateX(-50%);background:rgba(15,18,22,.5);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:5px 13px;display:none;font-size:14px;');
+const scanEl = hudEl(HUDBASE + 'left:50%;top:40%;transform:translateX(-50%);background:rgba(15,18,22,.82);border:1px solid rgba(255,255,255,.14);border-radius:12px;padding:14px 22px;font-size:18px;font-weight:600;display:none;');
 const endEl = hudEl('position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,10,13,.72);z-index:6;color:#fff;font:14px system-ui,sans-serif;');
 let toastT = 0;
 function toast(msg) { toastEl.textContent = msg; toastEl.style.opacity = '1'; toastT = 2.4; }
@@ -552,34 +554,51 @@ function addCartMini(shape, color, name) {
   cartHold.add(mini); cartMinis.push(mini);
 }
 function removeCartMini() { const m = cartMinis.pop(); if (m && cartHold) cartHold.remove(m); }
-function clearCart() { for (const m of cartMinis) if (cartHold) cartHold.remove(m); cartMinis.length = 0; }
+function clearCart() { for (const m of cartMinis) if (cartHold) cartHold.remove(m); cartMinis.length = 0; cartFragiles.length = 0; }
 
-function grab(it) {
-  if (!it || it.grabbed) return;
-  it.grabbed = true; GAME.cart++;
-  if (_hi === it) { _hi.mesh.scale.setScalar(1); _hi = null; }
-  // detach the product from the shelf and send it flying into the cart
+function detach(it) { // pull a product off its shelf, return its world position
   const wp = new THREE.Vector3(); it.mesh.getWorldPosition(wp);
   if (it.mesh.parent) it.mesh.parent.remove(it.mesh);
-  scene.add(it.mesh); it.mesh.position.copy(wp); it.mesh.scale.setScalar(1);
-  flyers.push({ mesh: it.mesh, from: wp.clone(), t: 0, item: it });
+  it.mesh.scale.setScalar(1); return wp;
+}
+function grab(it) {
+  if (!it || it.grabbed) return;
+  if (_hi === it) { _hi.mesh.scale.setScalar(1); _hi = null; }
+  // contest: a nearby shopper might race you for the item
+  const rival = npcs.find(n => n.state === 'wander' && n.stun <= 0 && n.g.position.distanceTo(it.pos) < 2.0);
+  if (rival && Math.random() < 0.28) {
+    if (Math.random() < 0.62) { toast('You beat them to it!'); }
+    else {
+      it.grabbed = true;
+      spawnFlyer(it.mesh, detach(it), () => rival.g.position.clone().setY(1.0), null, 1);
+      rival.target = it.pos.clone();
+      toast('🛒 A shopper grabbed the ' + it.name + ' first!');
+      return;
+    }
+  }
+  it.grabbed = true; GAME.cart++;
+  if (it.id === 'eggs' || it.id === 'cake') cartFragiles.push({ id: it.id, name: it.name });
+  // detach the product from the shelf and send it flying into the cart
+  spawnFlyer(it.mesh, detach(it), cartWorld, () => { addCartMini(it.shape, it.color, it.name); if (fpCart) fpCart.position.y = -0.05; }, 1);
   const entry = GAME.list.find(e => e.id === it.id && e.got < e.need);
   let pts = it.score; if (entry) { entry.got++; pts += 5; }
   GAME.score += pts; popScore('+' + pts + '  ' + it.name + (entry ? ' ✓' : ''));
   renderList(); renderScore();
   if (listComplete()) toast('List complete — head to CHECKOUT!');
 }
+function cartWorld() { const v = new THREE.Vector3(); if (cartHold) cartHold.getWorldPosition(v); v.y += 0.15; return v; }
+function spawnFlyer(mesh, from, getTarget, onLand, baseScale) {
+  mesh.position.copy(from); scene.add(mesh);
+  flyers.push({ mesh, from: from.clone(), t: 0, getTarget, onLand, baseScale: baseScale || 1 });
+}
 function updateFlyers(dt) {
-  if (!flyers.length) return;
-  const target = new THREE.Vector3(); if (cartHold) cartHold.getWorldPosition(target);
-  target.y += 0.15;
   for (let i = flyers.length - 1; i >= 0; i--) {
     const f = flyers[i]; f.t = Math.min(1, f.t + dt / 0.45);
-    f.mesh.position.lerpVectors(f.from, target, f.t);
+    f.mesh.position.lerpVectors(f.from, f.getTarget(), f.t);
     f.mesh.position.y += Math.sin(f.t * Math.PI) * 0.5; // arc
     f.mesh.rotation.y += dt * 8;
-    f.mesh.scale.setScalar(1 - 0.55 * f.t);
-    if (f.t >= 1) { scene.remove(f.mesh); addCartMini(f.item.shape, f.item.color, f.item.name); if (fpCart) fpCart.position.y = -0.05; flyers.splice(i, 1); }
+    f.mesh.scale.setScalar(f.baseScale * (1 - 0.45 * f.t));
+    if (f.t >= 1) { scene.remove(f.mesh); if (f.onLand) f.onLand(); flyers.splice(i, 1); }
   }
 }
 
@@ -688,6 +707,9 @@ function steal(n) {
   const entry = GAME.list.find(e => e.got > 0);
   if (!entry) { n.state = 'wander'; n.target = randomWalkable(); return; }
   entry.got--; GAME.cart = Math.max(0, GAME.cart - 1); GAME.stolen++; removeCartMini();
+  // the snatched item flies from your cart to the thief
+  const sdef = itemDef(entry.id);
+  if (sdef) spawnFlyer(product(sdef[0], sdef[1], sdef[2]), cartWorld(), () => n.g.position.clone().setY(1.0), null, 0.4);
   n.stolen = entry; n.state = 'flee'; n.speed = 2.4 + GAME.round * 0.2; n.target = farCorner();
   renderList(); renderScore();
   toast('🦹 A shopper snatched your ' + entry.name + '! Chase them — press E!');
@@ -699,7 +721,9 @@ function fleeingThiefNear(r) {
 function recover(n) {
   if (!n || !n.stolen) return;
   const e = n.stolen; e.got++; GAME.cart++; GAME.stolen = Math.max(0, GAME.stolen - 1); GAME.score += 10;
-  const def = ITEMS.find(t => t[3] === e.id); if (def) addCartMini(def[0], def[1], def[2]);
+  // the item flies back from the thief into your cart
+  const rdef = itemDef(e.id);
+  if (rdef) spawnFlyer(product(rdef[0], rdef[1], rdef[2]), n.g.position.clone().setY(1.0), cartWorld, () => addCartMini(rdef[0], rdef[1], rdef[2]), 0.4);
   n.stolen = null; n.state = 'wander'; setThiefLook(n, false); n.speed = n.baseSpeed; n.target = randomWalkable();
   renderList(); renderScore();
   toast('✓ Got your ' + e.name + ' back! +10');
@@ -763,6 +787,23 @@ function startGame() {
   for (let i = 0; i < 9; i++) spawnNpc(i);
   toast('Grab your list with E — watch for thieves — then CHECKOUT');
 }
+function dropSplat(id, pos) {
+  const def = itemDef(id); const col = def ? def[1] : 0xffe070;
+  const s = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.28, 0.015, 12), new THREE.MeshStandardMaterial({ color: col, roughness: 0.85 }));
+  s.position.set(pos.x, 0.01, pos.z); s.scale.set(1, 1, 1.25); s.receiveShadow = true; scene.add(s);
+}
+function doCheckout() {
+  if (GAME.scanning || !listComplete()) return;
+  GAME.scanning = true;
+  const total = Math.max(1, cartMinis.length);
+  let i = 0;
+  scanEl.style.display = 'block';
+  const tick = () => {
+    if (i < total) { if (cartMinis.length) removeCartMini(); i++; scanEl.textContent = '🔊 Scanning… ' + i + '/' + total; setTimeout(tick, 150); }
+    else { scanEl.style.display = 'none'; GAME.scanning = false; advanceRound(); }
+  };
+  setTimeout(tick, 250);
+}
 function makeParkedCart() {
   const g = new THREE.Group();
   const basket = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.4, 0.8), new THREE.MeshStandardMaterial({ color: 0xc2c7cc, metalness: 0.6, roughness: 0.35, transparent: true, opacity: 0.55 }));
@@ -795,7 +836,7 @@ function interact() {
   if (thief) { recover(thief); return; }
   if (GAME.parked) { toast('Press P to grab your cart first'); return; }
   if (GAME.checkout && camera.position.distanceTo(GAME.checkout) < 2.5) {
-    if (listComplete()) advanceRound(); else toast('Finish your list before checkout!');
+    if (listComplete()) doCheckout(); else toast('Finish your list before checkout!');
     return;
   }
   grab(findTarget());
@@ -896,6 +937,15 @@ function frame() {
           const d = Math.sqrt(d2) || 1; n.vx = dx / d * 4.5; n.vz = dz / d * 4.5; n.stun = 0.7;
           if (n.state === 'wander') n.target = randomWalkable();
           _shake = 0.3; toast(BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]);
+          // a hard bump can smash a fragile item out of your cart
+          if (cartFragiles.length && Math.random() < 0.5) {
+            const f = cartFragiles.pop();
+            GAME.cart = Math.max(0, GAME.cart - 1); removeCartMini();
+            const le = GAME.list.find(x => x.id === f.id && x.got > 0); if (le) le.got--;
+            GAME.score = Math.max(0, GAME.score - 10);
+            dropSplat(f.id, camera.position);
+            toast('💥 Your ' + f.name + ' smashed! −10'); renderList(); renderScore();
+          }
         }
       }
     }
@@ -903,8 +953,8 @@ function frame() {
   if (_shake > 0) _shake = Math.max(0, _shake - dt);
   if (fpCart) fpCart.position.y += (0 - fpCart.position.y) * Math.min(1, dt * 12); // recoil settle
   updateFlyers(dt);
-  // pause when the pointer is released (Esc) — timer + shoppers freeze
-  if (GAME.started && !GAME.over && controls.isLocked) updateGame(dt);
+  // pause when the pointer is released (Esc) or during a checkout scan
+  if (GAME.started && !GAME.over && !GAME.scanning && controls.isLocked) updateGame(dt);
   composer.render();
 }
 frame();
@@ -920,7 +970,7 @@ addEventListener('resize', () => {
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
 window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__advanceRound = advanceRound; window.__gameOver = gameOver; window.__nearestNeeded = nearestNeeded;
-window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark;
+window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark; window.__doCheckout = doCheckout; window.__cartFragiles = cartFragiles;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
