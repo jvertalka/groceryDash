@@ -74,7 +74,7 @@ const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 120);
-camera.position.set(0, 1.62, 8.5);
+camera.position.set(0, 1.62, 9.5);
 scene.add(camera); // so the first-person cart (a child of the camera) renders
 
 // post-processing: gentle bloom so the ceiling panels + highlights glow
@@ -100,7 +100,7 @@ key.shadow.bias = -0.00015;
 scene.add(key);
 
 // ---------------------------------------------------------------- store box
-const STORE = { w: 14, d: 20, h: 3.4 };
+const STORE = { w: 18, d: 22, h: 3.4 };
 
 function tileTexture() {
   const c = document.createElement('canvas'); c.width = c.height = 512;
@@ -152,13 +152,13 @@ ceiling.rotation.x = Math.PI / 2; ceiling.position.y = STORE.h; scene.add(ceilin
 const panelMat = new THREE.MeshStandardMaterial({
   color: 0xffffff, emissive: 0xfff6e8, emissiveIntensity: 1.4, roughness: 1
 });
-for (let zi = -2; zi <= 2; zi++) {
-  for (let xi = -1; xi <= 1; xi += 2) {
+for (const xi of [-6, -2, 2, 6]) {
+  for (const zi of [-8, -3.5, 1, 6.5]) {
     const panel = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 2.4), panelMat);
-    panel.position.set(xi * 3.2, STORE.h - 0.05, zi * 3.8);
+    panel.position.set(xi, STORE.h - 0.05, zi);
     scene.add(panel);
-    const pl = new THREE.PointLight(0xfff2dd, 12, 12, 2.0);
-    pl.position.set(xi * 3.2, STORE.h - 0.4, zi * 3.8);
+    const pl = new THREE.PointLight(0xfff2dd, 10, 13, 2.0);
+    pl.position.set(xi, STORE.h - 0.4, zi);
     scene.add(pl);
   }
 }
@@ -171,6 +171,9 @@ const ITEMS = [
   ['carton', 0xE89B3C, 'JUICE', 'oj', 6], ['can', 0xB03A48, 'SOUP', 'soup', 5], ['can', 0x4FB477, 'BEANS', 'beans', 5], ['bottle', 0x8B3A3A, 'COLA', 'soda', 5],
   ['bottle', 0x6BB3E8, 'WATER', 'water', 5], ['bag', 0xE5C07B, 'CHIPS', 'chips', 5], ['bag', 0xD9A066, 'BREAD', 'bread', 5], ['produce', 0xD64545, 'APPLE', 'apple', 5],
   ['produce', 0xE8C547, 'BANANA', 'banana', 5], ['wedge', 0xE8B64C, 'CHEESE', 'cheese', 6], ['round', 0xF6B5CC, 'CAKE', 'cake', 20], ['bag', 0xEFEFEF, 'RICE', 'rice', 5],
+  ['carton', 0xF5ECD7, 'EGGS', 'eggs', 8], ['box', 0xF5F5F5, 'TISSUES', 'tissues', 5], ['bag', 0xF4E1A1, 'POPCORN', 'popcorn', 5], ['bottle', 0xE8B104, 'MUSTARD', 'mustard', 5],
+  ['can', 0x4FB477, 'ENERGY', 'energy', 7], ['can', 0xC0392B, 'SALSA', 'salsa', 6], ['can', 0xDFA95A, 'RAMEN', 'ramen', 6], ['tray', 0xA83A3A, 'BEEF', 'beef', 7],
+  ['tray', 0xC47650, 'HOT DOGS', 'hotdog', 6], ['tray', 0xF8D6CE, 'ICE CREAM', 'icecream', 7],
 ];
 
 const matCache = new Map();
@@ -246,6 +249,11 @@ function product(shape, color, name) {
   } else if (shape === 'round') {
     const b = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.14, 28), mat(color));
     b.position.y = 0.07; g.add(b);
+  } else if (shape === 'tray') {
+    const tr = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.26), mat(color));
+    tr.position.y = 0.06;
+    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.05, 0.26), mat(0xffffff, { transparent: true, opacity: 0.5, roughness: 0.2 }));
+    lid.position.y = 0.135; g.add(tr, lid);
   }
   g.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
   return g;
@@ -259,6 +267,7 @@ const boardMat = new THREE.MeshStandardMaterial({ color: 0xb9bec4, roughness: 0.
 const SECTION_COLORS = [0xB7D8A3, 0xD9A066, 0xCBE3EF, 0xE5B04A, 0xB0ABA0, 0x9BC4DA];
 const shelfBoxes = []; // AABBs for collision (xz)
 const shelfItems = []; // grabbable products: { id, name, score, mesh, pos, grabbed }
+let _prodIdx = 0;      // global cursor so every item type gets placed evenly
 
 function shelfUnit(cx, cz, faceX, sectionColor) {
   // A unit is long along Z (length ~4.4), depth ~0.8 along X, faces +/-X (aisle).
@@ -279,9 +288,9 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
   for (const by of boardYs) {
     const board = new THREE.Mesh(new THREE.BoxGeometry(depth, 0.05, len), boardMat);
     board.position.set(0, by, 0); grp.add(board);
-    const n = 9;
+    const n = 6;
     for (let i = 0; i < n; i++) {
-      const idx = (((i + Math.round(by * 7) + Math.round(cz)) % ITEMS.length) + ITEMS.length) % ITEMS.length;
+      const idx = _prodIdx++ % ITEMS.length;
       const [shape, color, name, id, score] = ITEMS[idx];
       const p = product(shape, color, name);
       p.position.set(faceX * (depth / 2 - 0.18), by + 0.025, -len / 2 + 0.35 + i * ((len - 0.7) / (n - 1)));
@@ -297,33 +306,39 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
 }
 
 // Two rows flanking a central aisle; three sections deep on each side.
-const rowX = 3.0;
-for (let s = 0; s < 3; s++) {
-  const cz = -5 + s * 5;
-  shelfUnit(-rowX, cz, +1, SECTION_COLORS[s]);       // left row faces +X (aisle)
-  shelfUnit(+rowX, cz, -1, SECTION_COLORS[s + 3]);   // right row faces -X (aisle)
+// four rows -> two shopping aisles (A around x=-4.25, B around x=+4.25),
+// with a cross-aisle through the middle and outer aisles by the walls.
+const ROWS = [
+  { x: -6, face: +1 }, { x: -2.5, face: -1 }, // aisle A (between them)
+  { x: 2.5, face: +1 }, { x: 6, face: -1 },   // aisle B (between them)
+];
+const SEG_Z = [-7, -2.5, 2];
+let _sec = 0;
+for (const r of ROWS) for (const cz of SEG_Z) {
+  shelfUnit(r.x, cz, r.face, SECTION_COLORS[_sec % SECTION_COLORS.length]); _sec++;
 }
 
 // hanging, softly-lit aisle signs over the central aisle
-function aisleSign(text, color, z) {
+function aisleSign(text, color, x, z) {
   const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
-  const x = cv.getContext('2d');
-  x.fillStyle = '#' + color.toString(16).padStart(6, '0'); x.fillRect(0, 0, 512, 128);
-  x.fillStyle = 'rgba(255,255,255,0.18)'; x.fillRect(0, 0, 512, 9); x.fillRect(0, 119, 512, 9);
-  x.fillStyle = '#ffffff'; x.font = 'bold 70px system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle';
-  x.fillText(text, 256, 70);
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0'); ctx.fillRect(0, 0, 512, 128);
+  ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(0, 0, 512, 9); ctx.fillRect(0, 119, 512, 9);
+  ctx.fillStyle = '#ffffff'; ctx.font = 'bold 70px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 256, 70);
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.55),
     new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.35, roughness: 0.7, side: THREE.DoubleSide }));
-  sign.position.set(0, STORE.h - 0.8, z); scene.add(sign);
+  sign.position.set(x, STORE.h - 0.8, z); scene.add(sign);
   for (const dx of [-0.95, 0.95]) {
     const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.5, 6), frameMat);
-    cable.position.set(dx, STORE.h - 0.52, z); scene.add(cable);
+    cable.position.set(x + dx, STORE.h - 0.52, z); scene.add(cable);
   }
 }
-aisleSign('PRODUCE', 0x4AA35A, -5);
-aisleSign('BAKERY', 0x8C5A2B, 0);
-aisleSign('DAIRY', 0x3D8AB0, 5);
+aisleSign('PRODUCE', 0x4AA35A, -4.25, -6);
+aisleSign('DAIRY', 0x3D8AB0, -4.25, 1);
+aisleSign('SNACKS', 0xE5B04A, 4.25, -6);
+aisleSign('HOUSEHOLD', 0x8A7E60, 4.25, 1);
 
 // storefront entrance on the south wall (behind the spawn — turn around to see it)
 (function entrance() {
@@ -413,7 +428,8 @@ function renderScore() {
 
 // --- shopping list ---
 function genList() {
-  const pool = ITEMS.filter(it => it[3]).slice(), out = [];
+  const present = new Set(shelfItems.map(s => s.id)); // only list items that exist on a shelf
+  const pool = ITEMS.filter(it => it[3] && present.has(it[3])).slice(), out = [];
   for (let i = 0; i < 5 && pool.length; i++) { const k = Math.floor(Math.random() * pool.length); const it = pool.splice(k, 1)[0]; out.push({ id: it[3], name: it[2], need: 1 + (Math.random() < 0.3 ? 1 : 0), got: 0 }); }
   return out;
 }
@@ -482,14 +498,14 @@ function grab(it) {
   x.fillStyle = '#1f7a3d'; x.fillRect(0, 0, 256, 64); x.fillStyle = '#fff'; x.font = 'bold 34px system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('CHECKOUT', 128, 34);
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
   const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.42), new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.5, side: THREE.DoubleSide })); sign.position.set(0, 1.85, 0); g.add(sign);
-  g.position.set(-4.3, 0, 7.4); scene.add(g);
-  GAME.checkout = new THREE.Vector3(-4.3, 0, 7.4);
+  g.position.set(-4.25, 0, 8); scene.add(g);
+  GAME.checkout = new THREE.Vector3(-4.25, 0, 8);
 })();
 
 // --- NPC shoppers (wander between random walkable points) ---
 const npcs = [];
 const NPC_SHIRTS = [0xC0392B, 0x2E86C1, 0x27AE60, 0x8E44AD, 0xE67E22, 0x16A085];
-function randomWalkable() { for (let i = 0; i < 40; i++) { const x = (Math.random() * 2 - 1) * 6.4, z = (Math.random() * 2 - 1) * 9.0; if (!blocked(x, z)) return new THREE.Vector3(x, 0, z); } return new THREE.Vector3(0, 0, 0); }
+function randomWalkable() { for (let i = 0; i < 40; i++) { const x = (Math.random() * 2 - 1) * 8.0, z = (Math.random() * 2 - 1) * 10.0; if (!blocked(x, z)) return new THREE.Vector3(x, 0, z); } return new THREE.Vector3(0, 0, 0); }
 function spawnNpc(i) {
   const g = new THREE.Group();
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.7, 4, 10), new THREE.MeshStandardMaterial({ color: NPC_SHIRTS[i % NPC_SHIRTS.length], roughness: 0.75 })); body.position.y = 0.85; g.add(body);
@@ -605,7 +621,7 @@ function startGame() {
   GAME.round = 1; GAME.timeLeft = roundTime(1); GAME.thiefTimer = 16; GAME.stolen = 0;
   GAME.list = genList(); renderList(); renderScore();
   listEl.style.display = 'block'; scoreEl.style.display = 'block';
-  for (let i = 0; i < 6; i++) spawnNpc(i);
+  for (let i = 0; i < 9; i++) spawnNpc(i);
   toast('Grab your list with E — watch for thieves — then CHECKOUT');
 }
 function interact() {
