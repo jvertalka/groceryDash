@@ -331,7 +331,7 @@ function shelfUnit(cx, cz, faceX, section) {
   for (const by of boardYs) {
     const board = new THREE.Mesh(new THREE.BoxGeometry(depth, 0.05, len), boardMat);
     board.position.set(0, by, 0); grp.add(board);
-    const n = 6;
+    const n = 4;
     for (let i = 0; i < n; i++) {
       const id = section.items[k++ % section.items.length];
       const [shape, color, name, , score] = itemDef(id);
@@ -364,7 +364,10 @@ const ROWS = [
 const SEG_Z = [-7, -2.5, 2];
 let _sec = 0;
 for (const r of ROWS) for (const cz of SEG_Z) {
-  shelfUnit(r.x, cz, r.face, SECTIONS[_sec % SECTIONS.length]); _sec++;
+  // double-sided gondola: stock BOTH faces so every aisle (incl. outer + the
+  // centre cross-aisle) shows products instead of bare shelf backs.
+  shelfUnit(r.x, cz, +1, SECTIONS[_sec % SECTIONS.length]); _sec++;
+  shelfUnit(r.x, cz, -1, SECTIONS[_sec % SECTIONS.length]); _sec++;
 }
 
 // (section signs are now hung per shelf unit inside shelfUnit)
