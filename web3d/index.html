@@ -45,6 +45,10 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 try {
 // ---------------------------------------------------------------- renderer
@@ -68,6 +72,15 @@ scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 
 const camera = new THREE.PerspectiveCamera(72, innerWidth / innerHeight, 0.05, 120);
 camera.position.set(0, 1.62, 8.5);
+scene.add(camera); // so the first-person cart (a child of the camera) renders
+
+// post-processing: gentle bloom so the ceiling panels + highlights glow
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+// gentle: only the emissive ceiling panels (HDR > 1.0) glow; keeps shelf
+// colours + dark frames intact (a bright store blooms everything otherwise).
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.3, 1.0));
+composer.addPass(new OutputPass());
 
 // ---------------------------------------------------------------- lights
 scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa6b2, 0.55));
@@ -267,10 +280,28 @@ function cart() {
     const w = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.04, 16), mat(0x222222));
     w.rotation.x = Math.PI / 2; w.position.set(dx, 0.07, dz); w.castShadow = true; g.add(w);
   }
-  g.position.set(0, 0, 4.5);
+  g.position.set(2.0, 0, 2.0);
   scene.add(g);
 }
 cart();
+
+// first-person cart pushed ahead of the camera (child of the camera)
+function firstPersonCart() {
+  const g = new THREE.Group();
+  const basket = new THREE.Mesh(
+    new THREE.BoxGeometry(0.62, 0.34, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0xd2d6da, metalness: 0.65, roughness: 0.3, transparent: true, opacity: 0.42 })
+  );
+  basket.position.set(0, -0.6, -1.0);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.33, 0.012, 8, 24), frameMat);
+  rim.rotation.x = Math.PI / 2; rim.scale.set(1.7, 1.3, 1); rim.position.set(0, -0.43, -1.0);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.6, 10), frameMat);
+  handle.rotation.z = Math.PI / 2; handle.position.set(0, -0.4, -0.62);
+  g.add(basket, rim, handle);
+  g.traverse(o => { if (o.isMesh) { o.castShadow = false; o.receiveShadow = false; } });
+  camera.add(g);
+}
+firstPersonCart();
 
 // ---------------------------------------------------------------- controls
 const controls = new PointerLockControls(camera, renderer.domElement);
@@ -322,7 +353,7 @@ function frame() {
     camera.position.y = 1.62;
     requestRender(); // keep looping while locked (movement + mouse-look)
   }
-  renderer.render(scene, camera);
+  composer.render();
 }
 controls.addEventListener('change', requestRender);
 controls.addEventListener('lock', requestRender);
@@ -332,11 +363,12 @@ requestRender();
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
   requestRender();
 });
 
 // signal for headless screenshot tooling
-window.__scene = scene; window.__renderer = renderer; window.__camera = camera;
+window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
