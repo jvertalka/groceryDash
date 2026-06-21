@@ -165,11 +165,12 @@ for (let zi = -2; zi <= 2; zi++) {
 
 // ---------------------------------------------------------------- products
 // Sampled from the game's item catalogue (id → shape + colour).
+// [shape, colour, label, id, score]
 const ITEMS = [
-  ['box', 0xE0B040, 'CEREAL'], ['box', 0xE86A92, 'CANDY'], ['box', 0xD2690E, 'PIZZA'], ['carton', 0xF2F2F2, 'MILK'],
-  ['carton', 0xE89B3C, 'JUICE'], ['can', 0xB03A48, 'SOUP'], ['can', 0x4FB477, 'BEANS'], ['bottle', 0x8B3A3A, 'COLA'],
-  ['bottle', 0x6BB3E8, 'WATER'], ['bag', 0xE5C07B, 'CHIPS'], ['bag', 0xD9A066, 'BREAD'], ['produce', 0xD64545, ''],
-  ['produce', 0xE8C547, ''], ['wedge', 0xE8B64C, 'CHEESE'], ['round', 0xF6B5CC, 'CAKE'], ['bag', 0xEFEFEF, 'RICE'],
+  ['box', 0xE0B040, 'CEREAL', 'cereal', 5], ['box', 0xE86A92, 'CANDY', 'candy', 5], ['box', 0xD2690E, 'PIZZA', 'pizza', 7], ['carton', 0xF2F2F2, 'MILK', 'milk', 5],
+  ['carton', 0xE89B3C, 'JUICE', 'oj', 6], ['can', 0xB03A48, 'SOUP', 'soup', 5], ['can', 0x4FB477, 'BEANS', 'beans', 5], ['bottle', 0x8B3A3A, 'COLA', 'soda', 5],
+  ['bottle', 0x6BB3E8, 'WATER', 'water', 5], ['bag', 0xE5C07B, 'CHIPS', 'chips', 5], ['bag', 0xD9A066, 'BREAD', 'bread', 5], ['produce', 0xD64545, 'APPLE', 'apple', 5],
+  ['produce', 0xE8C547, 'BANANA', 'banana', 5], ['wedge', 0xE8B64C, 'CHEESE', 'cheese', 6], ['round', 0xF6B5CC, 'CAKE', 'cake', 20], ['bag', 0xEFEFEF, 'RICE', 'rice', 5],
 ];
 
 const matCache = new Map();
@@ -257,6 +258,7 @@ const boardMat = new THREE.MeshStandardMaterial({ color: 0xb9bec4, roughness: 0.
 // section back-panel colours (produce/bakery/dairy/snacks/household/frozen)
 const SECTION_COLORS = [0xB7D8A3, 0xD9A066, 0xCBE3EF, 0xE5B04A, 0xB0ABA0, 0x9BC4DA];
 const shelfBoxes = []; // AABBs for collision (xz)
+const shelfItems = []; // grabbable products: { id, name, score, mesh, pos, grabbed }
 
 function shelfUnit(cx, cz, faceX, sectionColor) {
   // A unit is long along Z (length ~4.4), depth ~0.8 along X, faces +/-X (aisle).
@@ -280,10 +282,12 @@ function shelfUnit(cx, cz, faceX, sectionColor) {
     const n = 9;
     for (let i = 0; i < n; i++) {
       const idx = (((i + Math.round(by * 7) + Math.round(cz)) % ITEMS.length) + ITEMS.length) % ITEMS.length;
-      const [shape, color, name] = ITEMS[idx];
+      const [shape, color, name, id, score] = ITEMS[idx];
       const p = product(shape, color, name);
       p.position.set(faceX * (depth / 2 - 0.18), by + 0.025, -len / 2 + 0.35 + i * ((len - 0.7) / (n - 1)));
       grp.add(p);
+      shelfItems.push({ id, name, score, mesh: p, grabbed: false,
+        pos: new THREE.Vector3(cx + p.position.x, p.position.y, cz + p.position.z) });
     }
   }
   grp.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
@@ -379,16 +383,153 @@ function firstPersonCart() {
 }
 firstPersonCart();
 
+// ================================================================ GAME LOGIC
+// Core loop ported from the porting bible: shopping list -> walk up & grab ->
+// score -> checkout. Plus wandering NPC shoppers for life.
+const GAME = { started: false, over: false, score: 0, cart: 0, time: 0, list: [], checkout: null };
+
+// --- HUD (DOM) ---
+function hudEl(css) { const d = document.createElement('div'); d.style.cssText = css; document.body.appendChild(d); return d; }
+const HUDBASE = 'position:fixed;color:#fff;font:13px system-ui,sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.7);z-index:4;';
+const listEl = hudEl(HUDBASE + 'left:14px;top:70px;background:rgba(15,18,22,.55);border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:11px 14px;min-width:172px;display:none;');
+const scoreEl = hudEl(HUDBASE + 'right:14px;top:14px;text-align:right;font-size:15px;display:none;');
+const promptEl = hudEl(HUDBASE + 'left:50%;bottom:88px;transform:translateX(-50%);background:rgba(15,18,22,.72);border-radius:8px;padding:8px 14px;display:none;');
+const toastEl = hudEl(HUDBASE + 'left:50%;top:17%;transform:translateX(-50%);font-size:20px;font-weight:600;opacity:0;transition:opacity .25s;pointer-events:none;');
+const endEl = hudEl('position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(8,10,13,.72);z-index:6;color:#fff;font:14px system-ui,sans-serif;');
+let toastT = 0;
+function toast(msg) { toastEl.textContent = msg; toastEl.style.opacity = '1'; toastT = 2.4; }
+function renderList() {
+  const rows = GAME.list.map(e => { const done = e.got >= e.need; return `<div style="${done ? 'opacity:.5;text-decoration:line-through;' : ''}">${done ? '✓' : '○'} ${e.name} <span style="opacity:.6">${e.got}/${e.need}</span></div>`; }).join('');
+  listEl.innerHTML = `<div style="font-weight:700;margin-bottom:6px;letter-spacing:.5px">SHOPPING LIST</div>${rows}`;
+}
+function renderScore() { scoreEl.innerHTML = `Score <b>${GAME.score}</b> · Cart <b>${GAME.cart}</b><br><span style="opacity:.7;font-size:12px">${Math.floor(GAME.time)}s</span>`; }
+
+// --- shopping list ---
+function genList() {
+  const pool = ITEMS.filter(it => it[3]).slice(), out = [];
+  for (let i = 0; i < 5 && pool.length; i++) { const k = Math.floor(Math.random() * pool.length); const it = pool.splice(k, 1)[0]; out.push({ id: it[3], name: it[2], need: 1 + (Math.random() < 0.3 ? 1 : 0), got: 0 }); }
+  return out;
+}
+const listComplete = () => GAME.list.length > 0 && GAME.list.every(e => e.got >= e.need);
+
+// --- grab targeting (nearest unclaimed product roughly ahead, within reach) ---
+const _vd = new THREE.Vector3(), _vt = new THREE.Vector3();
+function findTarget() {
+  if (!GAME.started || GAME.over) return null;
+  camera.getWorldDirection(_vd);
+  let best = null, bestD = 1e9;
+  for (const it of shelfItems) {
+    if (it.grabbed) continue;
+    const d = camera.position.distanceTo(it.pos);
+    if (d > 2.2) continue;
+    _vt.copy(it.pos).sub(camera.position).normalize();
+    if (_vt.dot(_vd) < 0.4) continue;
+    if (d < bestD) { bestD = d; best = it; }
+  }
+  return best;
+}
+function grab(it) {
+  if (!it || it.grabbed) return;
+  it.grabbed = true; it.mesh.visible = false; GAME.cart++;
+  const entry = GAME.list.find(e => e.id === it.id && e.got < e.need);
+  let pts = it.score; if (entry) { entry.got++; pts += 5; }
+  GAME.score += pts; toast('+' + pts + '  ' + it.name + (entry ? '  ✓' : ''));
+  renderList(); renderScore();
+  if (listComplete()) toast('List complete — head to CHECKOUT!');
+}
+
+// --- checkout counter ---
+(function buildCheckout() {
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 0.85), new THREE.MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.5, metalness: 0.3 }));
+  base.position.y = 0.45; base.castShadow = true; base.receiveShadow = true; g.add(base);
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.05, 0.55), new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.7 })); belt.position.y = 0.93; g.add(belt);
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64; const x = cv.getContext('2d');
+  x.fillStyle = '#1f7a3d'; x.fillRect(0, 0, 256, 64); x.fillStyle = '#fff'; x.font = 'bold 34px system-ui, sans-serif'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('CHECKOUT', 128, 34);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 0.42), new THREE.MeshStandardMaterial({ map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 0.5, side: THREE.DoubleSide })); sign.position.set(0, 1.85, 0); g.add(sign);
+  g.position.set(-4.3, 0, 7.4); scene.add(g);
+  GAME.checkout = new THREE.Vector3(-4.3, 0, 7.4);
+})();
+
+// --- NPC shoppers (wander between random walkable points) ---
+const npcs = [];
+const NPC_SHIRTS = [0xC0392B, 0x2E86C1, 0x27AE60, 0x8E44AD, 0xE67E22, 0x16A085];
+function randomWalkable() { for (let i = 0; i < 40; i++) { const x = (Math.random() * 2 - 1) * 6.4, z = (Math.random() * 2 - 1) * 9.0; if (!blocked(x, z)) return new THREE.Vector3(x, 0, z); } return new THREE.Vector3(0, 0, 0); }
+function spawnNpc(i) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.7, 4, 10), new THREE.MeshStandardMaterial({ color: NPC_SHIRTS[i % NPC_SHIRTS.length], roughness: 0.75 })); body.position.y = 0.85; g.add(body);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 12), new THREE.MeshStandardMaterial({ color: 0xe0b48a, roughness: 0.6 })); head.position.y = 1.42; g.add(head);
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  g.position.copy(randomWalkable()); scene.add(g);
+  npcs.push({ g, target: randomWalkable(), speed: 1.0 + Math.random() * 0.8 });
+}
+function updateNpcs(dt) {
+  for (const n of npcs) {
+    const pos = n.g.position, d = n.target.clone().sub(pos); d.y = 0;
+    if (d.length() < 0.4) { n.target = randomWalkable(); continue; }
+    d.normalize();
+    const nx = pos.x + d.x * n.speed * dt, nz = pos.z + d.z * n.speed * dt;
+    let moved = false;
+    if (!blocked(nx, pos.z)) { pos.x = nx; moved = true; }
+    if (!blocked(pos.x, nz)) { pos.z = nz; moved = true; }
+    if (!moved) n.target = randomWalkable();
+    n.g.rotation.y = Math.atan2(d.x, d.z);
+  }
+}
+
+// --- per-frame HUD + lifecycle ---
+function updateHud(dt) {
+  if (toastT > 0) { toastT -= dt; if (toastT <= 0) toastEl.style.opacity = '0'; }
+  renderScore();
+  if (GAME.checkout && camera.position.distanceTo(GAME.checkout) < 2.5) {
+    promptEl.style.display = 'block';
+    promptEl.textContent = listComplete() ? '[E] Checkout' : '[E] Checkout (list unfinished)';
+    return;
+  }
+  const t = findTarget();
+  if (t) { promptEl.style.display = 'block'; promptEl.textContent = '[E] Grab ' + t.name; }
+  else promptEl.style.display = 'none';
+}
+function startGame() {
+  if (GAME.started) return;
+  GAME.started = true; GAME.over = false; GAME.score = 0; GAME.cart = 0; GAME.time = 0;
+  GAME.list = genList(); renderList(); renderScore();
+  listEl.style.display = 'block'; scoreEl.style.display = 'block';
+  for (let i = 0; i < 6; i++) spawnNpc(i);
+  toast('Grab your list with E — then get to CHECKOUT');
+}
+function interact() {
+  if (!GAME.started || GAME.over) return;
+  if (GAME.checkout && camera.position.distanceTo(GAME.checkout) < 2.5) { endRun(); return; }
+  grab(findTarget());
+}
+function endRun() {
+  if (GAME.over) return;
+  GAME.over = true;
+  const complete = listComplete(), bonus = complete ? 300 : 0; GAME.score += bonus;
+  if (document.exitPointerLock) document.exitPointerLock();
+  promptEl.style.display = 'none';
+  endEl.style.display = 'flex';
+  endEl.innerHTML = `<div style="background:rgba(15,18,22,.92);border:1px solid rgba(255,255,255,.15);border-radius:16px;padding:28px 36px;text-align:center;max-width:360px">
+    <h1 style="margin:0 0 8px;font-size:24px">Checkout complete</h1>
+    <p style="opacity:.82;margin:4px 0">List items: <b>${GAME.list.filter(e => e.got >= e.need).length}/${GAME.list.length}</b>${complete ? ' · <b>+300</b> bonus' : ''}</p>
+    <p style="opacity:.82;margin:4px 0">Cart: <b>${GAME.cart}</b> · Time: <b>${Math.floor(GAME.time)}s</b></p>
+    <h2 style="margin:14px 0 18px;font-size:30px">Score ${GAME.score}</h2>
+    <div onclick="location.reload()" style="cursor:pointer;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:9px 16px;display:inline-block">Play again</div>
+  </div>`;
+}
+
 // ---------------------------------------------------------------- controls
 const controls = new PointerLockControls(camera, renderer.domElement);
 const overlay = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
 overlay.addEventListener('click', () => controls.lock());
-controls.addEventListener('lock', () => { overlay.style.display = 'none'; crosshair.style.display = 'block'; });
+controls.addEventListener('lock', () => { overlay.style.display = 'none'; crosshair.style.display = 'block'; startGame(); });
 controls.addEventListener('unlock', () => { overlay.style.display = 'flex'; crosshair.style.display = 'none'; });
 
 const keys = {};
-addEventListener('keydown', e => { keys[e.code] = true; requestRender(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE') interact(); requestRender(); });
 addEventListener('keyup', e => { keys[e.code] = false; requestRender(); });
 
 const PLAYER_R = 0.35, SPEED = 3.2;
@@ -406,10 +547,9 @@ const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 // Render on demand: one frame on any change, and a continuous loop only while
 // the pointer is locked (so the page goes idle when static — lets screenshot
 // tooling capture, and saves the GPU when nobody's moving).
-let rafId = 0;
-function requestRender() { if (!rafId) rafId = requestAnimationFrame(frame); }
+function requestRender() {} // no-op: the loop runs continuously now (NPCs + HUD need per-frame updates)
 function frame() {
-  rafId = 0;
+  requestAnimationFrame(frame);
   const dt = Math.min(clock.getDelta(), 0.05);
   if (controls.isLocked) {
     camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
@@ -427,14 +567,11 @@ function frame() {
       if (!blocked(p.x, nz)) p.z = nz;
     }
     camera.position.y = 1.62;
-    requestRender(); // keep looping while locked (movement + mouse-look)
   }
+  if (GAME.started && !GAME.over) { GAME.time += dt; updateNpcs(dt); updateHud(dt); }
   composer.render();
 }
-controls.addEventListener('change', requestRender);
-controls.addEventListener('lock', requestRender);
-controls.addEventListener('unlock', requestRender);
-requestRender();
+frame();
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -445,6 +582,8 @@ addEventListener('resize', () => {
 
 // signal for headless screenshot tooling
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
+window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
+window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__endRun = endRun;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
