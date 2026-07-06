@@ -26,7 +26,8 @@ const FILES = [
   [tex('wood_planks', 'arm'),    'tex/wood/arm.jpg'],
   [tex('wood_planks', 'nor_gl'), 'tex/wood/nor.jpg'],
 
-  [`${GH}/Soldier.glb`, 'models/shopper.glb'],
+  // casual civilian (jeans + shirt), rigged, baked walk loop — Khronos sample (CC-BY 4.0 / Cesium)
+  ['https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb', 'models/shopper.glb'],
 ];
 
 let ok = 0, fail = 0;

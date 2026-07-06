@@ -495,7 +495,8 @@ export function buildStore(scene, loader) {
   return {
     colliders, bounds, stock, corridors,
     checkout: co.point, checkoutRing: ring,
-    spawn: new THREE.Vector3(0, 1.65, 11.6),
+    spawn: new THREE.Vector3(0, 1.65, 10.2), // clear of the cart-corral collider
+
     update(dt, camera) {
       t += dt;
       for (const door of doors) {

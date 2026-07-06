@@ -64,11 +64,43 @@ try {
   composer.addPass(new OutputPass());
 
   // ---------------------------------------------------------------- controls
+  // Pointer lock when the browser allows it; otherwise (sandboxed iframes,
+  // embedded previews) fall back to drag-to-look so the game ALWAYS plays.
   const controls = new PointerLockControls(camera, renderer.domElement);
   scene.add(controls.getObject());
-  addEventListener('click', () => { if (boot.style.display === 'none' && !controls.isLocked) controls.lock(); });
-  controls.addEventListener('lock', () => { SFX.start(); crosshair.style.display = 'block'; hint.style.opacity = '0'; });
-  controls.addEventListener('unlock', () => { crosshair.style.display = 'none'; });
+  let playing = false, fallbackLook = false;
+  camera.rotation.reorder('YXZ');
+
+  function enableFallback() {
+    if (fallbackLook || controls.isLocked) return;
+    fallbackLook = true; playing = true;
+    SFX.start();
+    crosshair.style.display = 'block';
+    hint.textContent = 'Drag to look · WASD move · E take item · M mute';
+    hint.style.opacity = '1';
+    setTimeout(() => (hint.style.opacity = '0'), 5000);
+  }
+  document.addEventListener('pointerlockerror', enableFallback);
+  addEventListener('click', () => {
+    if (boot.style.display !== 'none' || playing) return;
+    try { controls.lock(); } catch { enableFallback(); }
+    // some embeds swallow the request without firing pointerlockerror
+    setTimeout(() => { if (!controls.isLocked && !fallbackLook) enableFallback(); }, 350);
+  });
+  controls.addEventListener('lock', () => { playing = true; SFX.start(); crosshair.style.display = 'block'; hint.style.opacity = '0'; });
+  controls.addEventListener('unlock', () => { if (!fallbackLook) playing = false; crosshair.style.display = 'none'; });
+
+  // drag-to-look (fallback mode only)
+  let dragging = false, lastX = 0, lastY = 0;
+  renderer.domElement.addEventListener('pointerdown', (e) => { if (fallbackLook) { dragging = true; lastX = e.clientX; lastY = e.clientY; } });
+  addEventListener('pointerup', () => (dragging = false));
+  addEventListener('pointermove', (e) => {
+    if (!fallbackLook || !dragging) return;
+    camera.rotation.y -= (e.clientX - lastX) * 0.0042;
+    camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - (e.clientY - lastY) * 0.0042, -1.45, 1.45);
+    camera.rotation.z = 0;
+    lastX = e.clientX; lastY = e.clientY;
+  });
 
   const keys = {};
   addEventListener('keydown', (e) => (keys[e.code] = true));
@@ -80,7 +112,7 @@ try {
   function move(dt) {
     const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
     const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
-    const moving = (f || s) && controls.isLocked;
+    const moving = (f || s) && playing;
     if (moving) {
       const dir = new THREE.Vector3();
       camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
@@ -90,8 +122,9 @@ try {
       const p = camera.position;
       const nx = p.x + (vx / len) * SPEED * dt, nz = p.z + (vz / len) * SPEED * dt;
       const b = world.bounds;
-      if (nx > b.minX && nx < b.maxX && !hits(nx, p.z)) p.x = nx;
-      if (nz > b.minZ && nz < b.maxZ && !hits(p.x, nz)) p.z = nz;
+      const stuck = hits(p.x, p.z); // if ever wedged inside a collider, let them walk out
+      if (nx > b.minX && nx < b.maxX && (stuck || !hits(nx, p.z))) p.x = nx;
+      if (nz > b.minZ && nz < b.maxZ && (stuck || !hits(p.x, nz))) p.z = nz;
       bob += dt * 10.5;
     }
     camera.position.y = 1.65 + (moving ? Math.sin(bob) * 0.03 : 0);
@@ -126,7 +159,7 @@ try {
     move(dt);
     world.update(dt, camera);
     shoppers.update(dt);
-    game.update(dt, controls.isLocked);
+    game.update(dt, playing);
     composer.render();
   }
   animate();
@@ -143,6 +176,7 @@ try {
     __scene: scene, __camera: camera, __renderer: renderer, __composer: composer,
     __controls: controls, __world: world, __STORE: STORE, __game: game,
     __stock: world.stock, __npcs: shoppers.npcs, __npcUpdate: shoppers.update, __ready: true,
+    __move: move, __setPlaying: (v) => (playing = v), __isPlaying: () => playing, __isFallback: () => fallbackLook,
   });
 } catch (e) {
   window.__err = (e && e.stack) || String(e);

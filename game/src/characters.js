@@ -6,8 +6,8 @@ import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js
 // the posed skeleton — for rigs whose armature carries the scale (Mixamo-style)
 // that number is garbage and NPCs come out giant/tiny. So we measure the
 // skeleton's world-space bone span instead, scale, then RE-measure and correct.
-const TARGET_H = 1.72;
-const FACING_Y = Math.PI; // model's visual forward; flip to 0 if they moonwalk
+const TARGET_H = 1.75;
+const FACING_Y = 0; // glTF-spec characters face +Z (Soldier needed PI; CesiumMan is spec-compliant)
 
 // soft blob shadow shared by all NPCs
 const blobGeo = new THREE.CircleGeometry(1, 24);
@@ -42,7 +42,10 @@ export function createShoppers(scene, manager, world) {
     const src = gltf.scene;
     const clips = gltf.animations || [];
     const clip = (re) => clips.find((c) => re.test(c.name)) || clips[0];
-    const idleClip = clip(/idle/i), walkClip = clip(/walk/i);
+    // CesiumMan ships a single walk loop — reuse it near-frozen as the "idle"
+    const walkClip = clip(/walk/i);
+    const idleClip = clips.find((c) => /idle/i.test(c.name)) || walkClip;
+    const idleIsWalk = idleClip === walkClip;
 
     // measure → scale → verify (bones give ~head-joint height; +6% ≈ skull top)
     const probe = cloneSkinned(src);
@@ -55,19 +58,23 @@ export function createShoppers(scene, manager, world) {
     const walkers = 6, browsers = 2;
     for (let i = 0; i < walkers + browsers; i++) {
       const model = cloneSkinned(src);
-      model.scale.setScalar(s);
+      model.scale.setScalar(s * rand(0.94, 1.06)); // human height variety
       // no real-time shadow (shadow maps are frozen for perf) — blob instead
       model.traverse((o) => { if (o.isMesh) { o.castShadow = false; o.frustumCulled = false; } });
       const blob = new THREE.Mesh(blobGeo, blobMat);
       blob.rotation.x = -Math.PI / 2; blob.position.y = 0.015 / s; blob.scale.setScalar(0.42 / s);
       model.add(blob);
       const mixer = new THREE.AnimationMixer(model);
-      const idle = mixer.clipAction(idleClip), walk = mixer.clipAction(walkClip);
-      idle.play(); walk.play(); walk.weight = 0; idle.weight = 1;
-      idle.time = Math.random() * 2; walk.time = Math.random() * 1.2;
+      const walk = mixer.clipAction(walkClip);
+      // one-clip rigs: "idle" is the walk loop crawling at 12% — reads as
+      // weight-shifting-in-place rather than a frozen mannequin
+      const idle = idleIsWalk ? walk : mixer.clipAction(idleClip);
+      if (idleIsWalk) { walk.play(); walk.timeScale = 0.12; }
+      else { idle.play(); walk.play(); walk.weight = 0; idle.weight = 1; idle.time = Math.random() * 2; }
+      walk.time = Math.random() * 1.2;
 
       const n = {
-        model, mixer, idle, walk,
+        model, mixer, idle, walk, oneClip: idleIsWalk,
         x: pick(xs), z: rand(zMin + 1, zMax - 1),
         yaw: rand(-Math.PI, Math.PI), speed: rand(0.85, 1.25),
         path: [], pause: rand(0, 2), browsing: i >= walkers,
@@ -103,8 +110,8 @@ export function createShoppers(scene, manager, world) {
       if (n.browsing) continue;
       if (n.pause > 0) {
         n.pause -= dt;
-        n.walk.weight = Math.max(0, n.walk.weight - dt * 3);
-        n.idle.weight = 1 - n.walk.weight;
+        if (n.oneClip) n.walk.timeScale = Math.max(0.12, n.walk.timeScale - dt * 2.5);
+        else { n.walk.weight = Math.max(0, n.walk.weight - dt * 3); n.idle.weight = 1 - n.walk.weight; }
         continue;
       }
       if (!n.path.length) { newPath(n); continue; }
@@ -125,9 +132,13 @@ export function createShoppers(scene, manager, world) {
       n.yaw += THREE.MathUtils.clamp(dy, -3 * dt, 3 * dt);
       n.model.position.set(n.x, 0, n.z);
       n.model.rotation.y = n.yaw + FACING_Y;
-      n.walk.weight = Math.min(1, n.walk.weight + dt * 3);
-      n.idle.weight = 1 - n.walk.weight;
-      n.walk.timeScale = n.speed / 1.3;
+      if (n.oneClip) {
+        n.walk.timeScale = Math.min(n.speed / 1.1, n.walk.timeScale + dt * 2.5);
+      } else {
+        n.walk.weight = Math.min(1, n.walk.weight + dt * 3);
+        n.idle.weight = 1 - n.walk.weight;
+        n.walk.timeScale = n.speed / 1.3;
+      }
     }
   }
 
