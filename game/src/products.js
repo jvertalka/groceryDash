@@ -35,7 +35,7 @@ function wrap(x, text, cx, y, maxW, lh) {
   lines.forEach((l, i) => x.fillText(l, cx, s + i * lh));
 }
 
-// Front-of-pack art. `wrapAround` widens the canvas for cylinder (can) labels.
+// Front-of-pack art. `wrapAround` widens the canvas for cylinder labels.
 function labelTexture(spec, wrapAround = false) {
   const key = spec.id + (wrapAround ? '_w' : '');
   if (_texCache.has(key)) return _texCache.get(key);
@@ -76,77 +76,205 @@ function labelTexture(spec, wrapAround = false) {
   return t;
 }
 
+// Shelf-edge price tag (per SKU, cached).
+export function priceTagTexture(spec) {
+  const key = 'tag_' + spec.id;
+  if (_texCache.has(key)) return _texCache.get(key);
+  const c = document.createElement('canvas'); c.width = 256; c.height = 96;
+  const x = c.getContext('2d');
+  x.fillStyle = '#fdfdf6'; x.fillRect(0, 0, 256, 96);
+  x.fillStyle = '#111'; x.textAlign = 'left';
+  x.font = `500 17px ${FONTS}`; x.fillText(spec.name, 12, 26);
+  x.font = `800 44px ${FONTS}`; x.fillText('$' + spec.price.toFixed(2), 12, 74);
+  x.fillStyle = '#c9241a'; x.fillRect(200, 0, 56, 96);
+  x.fillStyle = '#fff'; x.save(); x.translate(228, 48); x.rotate(-Math.PI / 2);
+  x.textAlign = 'center'; x.font = `700 15px ${FONTS}`; x.fillText('EVERYDAY', 0, 5); x.restore();
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  _texCache.set(key, t);
+  return t;
+}
+
 // ============================================================ PRODUCT CATALOG
-// [id, brand, name, kind, bg1, bg2, accent, ink?, tag?, section]
 export const PRODUCTS = [
-  { id: 'cereal_oat', brand: 'Northfield', name: 'Honey Oats', kind: 'box', bg1: '#e8a020', bg2: '#c6741a', accent: '#5a2d00', ink: '#fff', tag: 'Whole Grain', section: 'pantry', weight: '450 g' },
-  { id: 'cereal_flake', brand: 'Sunrise', name: 'Corn Flakes', kind: 'box', bg1: '#e23b2e', bg2: '#a51f16', accent: '#ffd23b', section: 'pantry', weight: '500 g' },
-  { id: 'cracker', brand: 'Harvest', name: 'Sea Salt Crackers', kind: 'box', bg1: '#3a7d44', bg2: '#245230', accent: '#ffe08a', section: 'pantry', weight: '250 g' },
-  { id: 'pasta', brand: 'Bella', name: 'Penne Rigate', kind: 'box', bg1: '#1d64b8', bg2: '#123f75', accent: '#ffcf33', section: 'pantry', weight: '500 g' },
+  // pantry
+  { id: 'cereal_oat', brand: 'Northfield', name: 'Honey Oats', kind: 'box', price: 4.29, bg1: '#e8a020', bg2: '#c6741a', accent: '#5a2d00', tag: 'Whole Grain', section: 'pantry', weight: '450 g' },
+  { id: 'cereal_flake', brand: 'Sunrise', name: 'Corn Flakes', kind: 'box', price: 3.89, bg1: '#e23b2e', bg2: '#a51f16', accent: '#ffd23b', section: 'pantry', weight: '500 g' },
+  { id: 'pasta', brand: 'Bella', name: 'Penne Rigate', kind: 'box', price: 1.79, bg1: '#1d64b8', bg2: '#123f75', accent: '#ffcf33', section: 'pantry', weight: '500 g' },
+  { id: 'sauce', brand: "Nonna's", name: 'Marinara', kind: 'jar', price: 3.49, bg1: '#b02318', bg2: '#7c150d', accent: '#f4e3c1', section: 'pantry', weight: '680 g' },
+  { id: 'pb', brand: 'Nutty', name: 'Peanut Butter', kind: 'jar', price: 4.99, bg1: '#a5692a', bg2: '#71431a', accent: '#ffe08a', section: 'pantry', weight: '454 g' },
+  { id: 'soup', brand: 'Kettle Co', name: 'Tomato Soup', kind: 'can', price: 1.49, bg1: '#d23324', bg2: '#8f1c12', accent: '#f4e3c1', section: 'pantry', weight: '400 g' },
+  { id: 'beans', brand: 'Kettle Co', name: 'Baked Beans', kind: 'can', price: 1.29, bg1: '#1f7ac2', bg2: '#12507f', accent: '#ffcf33', section: 'pantry', weight: '415 g' },
+  { id: 'corn', brand: 'Golden', name: 'Sweet Corn', kind: 'can', price: 0.99, bg1: '#f2b800', bg2: '#c48f00', accent: '#2e7d32', ink: '#3a2a00', section: 'pantry', weight: '340 g' },
+  { id: 'ketchup', brand: 'Reddy', name: 'Tomato Ketchup', kind: 'bottle', price: 2.79, bg1: '#c8231b', bg2: '#8a1610', accent: '#fff', section: 'pantry', weight: '567 g' },
 
-  { id: 'soup', brand: 'Kettle Co', name: 'Tomato Soup', kind: 'can', bg1: '#d23324', bg2: '#8f1c12', accent: '#f4e3c1', section: 'pantry', weight: '400 g' },
-  { id: 'beans', brand: 'Kettle Co', name: 'Baked Beans', kind: 'can', bg1: '#1f7ac2', bg2: '#12507f', accent: '#ffcf33', section: 'pantry', weight: '415 g' },
-  { id: 'corn', brand: 'Golden', name: 'Sweet Corn', kind: 'can', bg1: '#f2b800', bg2: '#c48f00', accent: '#2e7d32', ink: '#3a2a00', section: 'pantry', weight: '340 g' },
+  // snacks
+  { id: 'chips', brand: 'Crunch', name: 'Sea Salt Chips', kind: 'bag', price: 2.99, bg1: '#2fae6a', bg2: '#1c6f43', accent: '#fff2b0', section: 'snacks', weight: '150 g' },
+  { id: 'chips_bbq', brand: 'Crunch', name: 'BBQ Chips', kind: 'bag', price: 2.99, bg1: '#c0392b', bg2: '#7c231a', accent: '#ffd23b', section: 'snacks', weight: '150 g' },
+  { id: 'pretzel', brand: 'Twist', name: 'Salted Pretzels', kind: 'bag', price: 2.49, bg1: '#8a5a2b', bg2: '#5c3a1a', accent: '#ffe08a', section: 'snacks', weight: '200 g' },
+  { id: 'cookies', brand: 'Oven Joy', name: 'Choco Chunk', kind: 'box', price: 3.29, bg1: '#4a2c8f', bg2: '#2e1a5e', accent: '#ffb84d', section: 'snacks', weight: '300 g' },
+  { id: 'gummies', brand: 'Chewy', name: 'Gummy Bears', kind: 'bag', price: 1.99, bg1: '#e0447a', bg2: '#9e2752', accent: '#ffe9f2', section: 'snacks', weight: '180 g' },
+  { id: 'cola', brand: 'Fizz', name: 'Cola Classic', kind: 'bottle', price: 1.89, bg1: '#3a2015', bg2: '#1e0f08', accent: '#e02b20', section: 'snacks', weight: '2 L' },
+  { id: 'water', brand: 'Alpine', name: 'Spring Water', kind: 'bottle', price: 0.99, bg1: '#2a7fc9', bg2: '#175a96', accent: '#eaf6ff', section: 'snacks', weight: '1.5 L' },
 
-  { id: 'chips', brand: 'Crunch', name: 'Sea Salt Chips', kind: 'bag', bg1: '#2fae6a', bg2: '#1c6f43', accent: '#fff2b0', section: 'snacks', weight: '150 g' },
-  { id: 'chips_bbq', brand: 'Crunch', name: 'BBQ Chips', kind: 'bag', bg1: '#c0392b', bg2: '#7c231a', accent: '#ffd23b', section: 'snacks', weight: '150 g' },
-  { id: 'pretzel', brand: 'Twist', name: 'Salted Pretzels', kind: 'bag', bg1: '#8a5a2b', bg2: '#5c3a1a', accent: '#ffe08a', section: 'snacks', weight: '200 g' },
+  // household
+  { id: 'tp', brand: 'CloudSoft', name: 'Bath Tissue 4pk', kind: 'boxwide', price: 5.49, bg1: '#eef3f8', bg2: '#c9d9ea', accent: '#2a6fc0', ink: '#173a63', section: 'household', weight: '4 rolls' },
+  { id: 'detergent', brand: 'Wave', name: 'Laundry Power', kind: 'boxtall', price: 8.99, bg1: '#1a9e8f', bg2: '#0f6a60', accent: '#ffd23b', section: 'household', weight: '1.8 kg' },
+  { id: 'tissues', brand: 'CloudSoft', name: 'Facial Tissues', kind: 'boxwide', price: 2.29, bg1: '#7fb7e0', bg2: '#4c86b3', accent: '#fff', section: 'household', weight: '120 ct' },
+  { id: 'soapbar', brand: 'Pure', name: 'Soap Bars 3pk', kind: 'box', price: 3.19, bg1: '#e8e0f4', bg2: '#c3b3e4', accent: '#6a3fb5', ink: '#3c2470', section: 'household', weight: '3 × 90 g' },
 
-  { id: 'milk', brand: 'Meadow', name: 'Whole Milk', kind: 'carton', bg1: '#f4f7fb', bg2: '#d7e4f2', accent: '#1f6fc2', ink: '#123a63', section: 'dairy', weight: '1 L' },
-  { id: 'juice', brand: 'Grove', name: 'Orange Juice', kind: 'carton', bg1: '#ff9a1f', bg2: '#e0700d', accent: '#fff', ink: '#5a2d00', section: 'dairy', weight: '1 L' },
+  // dairy
+  { id: 'milk', brand: 'Meadow', name: 'Whole Milk', kind: 'carton', price: 2.59, bg1: '#f4f7fb', bg2: '#d7e4f2', accent: '#1f6fc2', ink: '#123a63', section: 'dairy', weight: '1 L' },
+  { id: 'juice', brand: 'Grove', name: 'Orange Juice', kind: 'carton', price: 3.49, bg1: '#ff9a1f', bg2: '#e0700d', accent: '#fff', ink: '#5a2d00', section: 'dairy', weight: '1 L' },
+  { id: 'yogurt', brand: 'Meadow', name: 'Greek Yogurt', kind: 'cup', price: 1.19, bg1: '#f7f3ec', bg2: '#e2d7c3', accent: '#3a7d44', ink: '#2b4a31', section: 'dairy', weight: '150 g' },
+  { id: 'cheese', brand: 'Dale', name: 'Cheddar Block', kind: 'box', price: 4.79, bg1: '#f2a71b', bg2: '#c07d10', accent: '#7a4a00', ink: '#402800', section: 'dairy', weight: '400 g' },
+
+  // bakery
+  { id: 'bread', brand: 'Hearth', name: 'Country Loaf', kind: 'bag', price: 2.89, bg1: '#d8a45c', bg2: '#a3743a', accent: '#5c3a1a', ink: '#3d2610', section: 'bakery', weight: '650 g' },
+  { id: 'muffins', brand: 'Hearth', name: 'Blueberry Muffins', kind: 'box', price: 4.49, bg1: '#4a5fb8', bg2: '#2c3a78', accent: '#ffd23b', section: 'bakery', weight: '4 ct' },
+
+  // frozen (inside glass-door cases)
+  { id: 'pizza', brand: 'Stonefire', name: 'Margherita Pizza', kind: 'boxwide', price: 5.99, bg1: '#b02318', bg2: '#701009', accent: '#ffe08a', section: 'frozen', weight: '390 g' },
+  { id: 'icecream', brand: 'Polar', name: 'Vanilla Ice Cream', kind: 'tub', price: 4.29, bg1: '#eef3f8', bg2: '#bcd2e8', accent: '#8a5a2b', ink: '#173a63', section: 'frozen', weight: '1 L' },
+
+  // produce (loose, on crate tables)
+  { id: 'apple', brand: 'Fresh', name: 'Gala Apples', kind: 'produce', price: 0.89, bg1: '#c62d1f', bg2: '#8a1a10', accent: '#fff', section: 'produce', weight: 'per lb' },
+  { id: 'orange', brand: 'Fresh', name: 'Navel Oranges', kind: 'produce', price: 0.99, bg1: '#f28c1b', bg2: '#c56a0d', accent: '#fff', section: 'produce', weight: 'per lb' },
+  { id: 'banana', brand: 'Fresh', name: 'Bananas', kind: 'produce', price: 0.59, bg1: '#f2c81b', bg2: '#c69f0d', accent: '#3a2a00', section: 'produce', weight: 'per lb' },
+  { id: 'lettuce', brand: 'Fresh', name: 'Iceberg Lettuce', kind: 'produce', price: 1.49, bg1: '#3a9d44', bg2: '#256b2d', accent: '#fff', section: 'produce', weight: 'each' },
 ];
 
+export const bySection = (s) => PRODUCTS.filter((p) => p.section === s);
+export const byId = (id) => PRODUCTS.find((p) => p.id === id);
+
+// ============================================================ GEOMETRY CACHE
+const _geoCache = new Map();
+function geo(key, make) {
+  if (!_geoCache.has(key)) _geoCache.set(key, make());
+  return _geoCache.get(key);
+}
+
+// Pillowed bag geometry: bulge front/back faces outward like a chip bag.
+function bagGeometry(w, h, d) {
+  return geo(`bag${w}x${h}`, () => {
+    const g = new THREE.BoxGeometry(w, h, d, 6, 6, 1);
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+      const bulge = Math.cos((x / w) * Math.PI) * Math.cos((y / h) * Math.PI) * 0.55 + 1;
+      p.setZ(i, z * bulge);
+    }
+    g.computeVertexNormals();
+    return g;
+  });
+}
+
 // ============================================================ MESH FACTORIES
+// Products do NOT cast shadows (GTAO grounds them) — keeps the shadow pass
+// cheap enough for thousands of facings under multiple shadow-casting lights.
+const mat = (o) => new THREE.MeshStandardMaterial(o);
+const sideMat = (spec) => mat({ color: new THREE.Color(spec.bg2), roughness: 0.85 });
+
 function boxProduct(spec, w, h, d) {
-  const face = new THREE.MeshStandardMaterial({ map: labelTexture(spec), roughness: 0.82, metalness: 0 });
-  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(spec.bg2), roughness: 0.85, metalness: 0 });
-  // BoxGeometry material order: +x,-x,+y,-y,+z,-z  → label on front(+z) & back(-z)
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), [side, side, side, side, face, face]);
-  m.castShadow = m.receiveShadow = true;
-  return m;
+  const face = mat({ map: labelTexture(spec), roughness: 0.82 });
+  const side = sideMat(spec);
+  return new THREE.Mesh(geo(`box${w}x${h}x${d}`, () => new THREE.BoxGeometry(w, h, d)), [side, side, side, side, face, face]);
 }
-
 function canProduct(spec, r, h) {
-  const label = new THREE.MeshStandardMaterial({ map: labelTexture(spec, true), roughness: 0.35, metalness: 0.5 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0xd7dde3, roughness: 0.3, metalness: 0.95 });
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 28, 1), [label, metal, metal]);
-  m.castShadow = m.receiveShadow = true;
-  return m;
+  const label = mat({ map: labelTexture(spec, true), roughness: 0.35, metalness: 0.5 });
+  const metal = mat({ color: 0xd7dde3, roughness: 0.3, metalness: 0.95 });
+  return new THREE.Mesh(geo(`can${r}x${h}`, () => new THREE.CylinderGeometry(r, r, h, 20, 1)), [label, metal, metal]);
 }
-
-function bagProduct(spec, w, h, d) {
-  const mat = new THREE.MeshStandardMaterial({ map: labelTexture(spec), roughness: 0.22, metalness: 0.15, envMapIntensity: 1.3 });
-  const back = new THREE.MeshStandardMaterial({ color: new THREE.Color(spec.bg2), roughness: 0.22, metalness: 0.15 });
-  const g = new THREE.BoxGeometry(w, h, d, 1, 1, 1);
-  // pillow the bag: pull front/back faces out a touch
-  const m = new THREE.Mesh(g, [back, back, back, back, mat, back]);
-  m.scale.set(1, 1, 1); m.castShadow = m.receiveShadow = true;
-  return m;
-}
-
-function cartonProduct(spec, w, h, d) {
-  const face = new THREE.MeshStandardMaterial({ map: labelTexture(spec), roughness: 0.5, metalness: 0 });
-  const side = new THREE.MeshStandardMaterial({ color: new THREE.Color(spec.bg2), roughness: 0.55, metalness: 0 });
+function jarProduct(spec, r, h) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.78, d), [side, side, side, side, face, face]);
-  body.position.y = h * 0.39; body.castShadow = body.receiveShadow = true; g.add(body);
-  // gable top
-  const topH = h * 0.22;
-  const top = new THREE.Mesh(new THREE.BoxGeometry(w, topH, d), side);
-  top.position.y = h * 0.78 + topH * 0.5; top.scale.z = 0.4; top.castShadow = true; g.add(top);
+  const label = mat({ map: labelTexture(spec, true), roughness: 0.25, envMapIntensity: 1.4 });
+  const body = new THREE.Mesh(geo(`jar${r}x${h}`, () => new THREE.CylinderGeometry(r, r * 0.96, h, 20, 1)), label);
+  body.position.y = h / 2; g.add(body);
+  const lid = new THREE.Mesh(geo(`jarlid${r}`, () => new THREE.CylinderGeometry(r * 0.82, r * 0.82, h * 0.16, 20)), mat({ color: 0xcfa348, metalness: 0.85, roughness: 0.35 }));
+  lid.position.y = h + h * 0.08; g.add(lid);
+  return g;
+}
+function bottleProduct(spec, r, h) {
+  const g = new THREE.Group();
+  const label = mat({ map: labelTexture(spec, true), roughness: 0.2, envMapIntensity: 1.5 });
+  const body = new THREE.Mesh(geo(`bot${r}x${h}`, () => new THREE.CylinderGeometry(r, r, h * 0.62, 18)), label);
+  body.position.y = h * 0.31; g.add(body);
+  const shoulder = new THREE.Mesh(geo(`botsh${r}`, () => new THREE.CylinderGeometry(r * 0.4, r, h * 0.2, 18)), mat({ color: new THREE.Color(spec.bg1), roughness: 0.15, envMapIntensity: 1.5 }));
+  shoulder.position.y = h * 0.72; g.add(shoulder);
+  const cap = new THREE.Mesh(geo(`botcap${r}`, () => new THREE.CylinderGeometry(r * 0.34, r * 0.34, h * 0.14, 14)), mat({ color: new THREE.Color(spec.accent), roughness: 0.4 }));
+  cap.position.y = h * 0.89; g.add(cap);
+  return g;
+}
+function bagProduct(spec, w, h, d) {
+  const front = mat({ map: labelTexture(spec), roughness: 0.22, metalness: 0.15, envMapIntensity: 1.35 });
+  const back = mat({ color: new THREE.Color(spec.bg2), roughness: 0.22, metalness: 0.15 });
+  return new THREE.Mesh(bagGeometry(w, h, d), [back, back, back, back, front, back]);
+}
+function cartonProduct(spec, w, h, d) {
+  const face = mat({ map: labelTexture(spec), roughness: 0.5 });
+  const side = sideMat(spec);
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(geo(`cart${w}x${h}`, () => new THREE.BoxGeometry(w, h * 0.78, d)), [side, side, side, side, face, face]);
+  body.position.y = h * 0.39; g.add(body);
+  const top = new THREE.Mesh(geo(`carttop${w}x${h}`, () => new THREE.BoxGeometry(w, h * 0.22, d * 0.4)), side);
+  top.position.y = h * 0.89; g.add(top);
+  return g;
+}
+function cupProduct(spec, r, h) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(geo(`cup${r}x${h}`, () => new THREE.CylinderGeometry(r * 0.82, r, h, 18)), mat({ map: labelTexture(spec, true), roughness: 0.4 }));
+  body.position.y = h / 2; g.add(body);
+  const foil = new THREE.Mesh(geo(`cupfoil${r}`, () => new THREE.CylinderGeometry(r * 0.84, r * 0.84, 0.006, 18)), mat({ color: 0xd9dee4, metalness: 0.9, roughness: 0.25 }));
+  foil.position.y = h + 0.003; g.add(foil);
+  return g;
+}
+function tubProduct(spec, r, h) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(geo(`tub${r}x${h}`, () => new THREE.CylinderGeometry(r, r * 0.88, h, 20)), mat({ map: labelTexture(spec, true), roughness: 0.45 }));
+  body.position.y = h / 2; g.add(body);
+  const lid = new THREE.Mesh(geo(`tublid${r}`, () => new THREE.CylinderGeometry(r * 1.04, r * 1.04, h * 0.14, 20)), mat({ color: new THREE.Color(spec.accent), roughness: 0.5 }));
+  lid.position.y = h + h * 0.07; g.add(lid);
+  return g;
+}
+// loose produce
+function fruit(spec) {
+  const g = new THREE.Group();
+  if (spec.id === 'banana') {
+    const m = new THREE.Mesh(geo('banana', () => new THREE.TorusGeometry(0.075, 0.02, 8, 14, Math.PI * 0.9)), mat({ color: 0xf2c81b, roughness: 0.55 }));
+    m.rotation.z = Math.PI * 0.55; m.position.y = 0.045; g.add(m);
+  } else if (spec.id === 'lettuce') {
+    const m = new THREE.Mesh(geo('lettuce', () => new THREE.SphereGeometry(0.075, 14, 10)), mat({ color: 0x69b04b, roughness: 0.9 }));
+    m.scale.y = 0.85; m.position.y = 0.064; g.add(m);
+  } else {
+    const col = spec.id === 'apple' ? 0xc62d1f : 0xf28c1b;
+    const m = new THREE.Mesh(geo('fruit', () => new THREE.SphereGeometry(0.052, 14, 10)), mat({ color: col, roughness: 0.45, envMapIntensity: 1.2 }));
+    m.scale.y = 0.94; m.position.y = 0.049; g.add(m);
+    if (spec.id === 'apple') {
+      const stem = new THREE.Mesh(geo('stem', () => new THREE.CylinderGeometry(0.004, 0.006, 0.03, 6)), mat({ color: 0x5c3a1a, roughness: 0.9 }));
+      stem.position.y = 0.1; g.add(stem);
+    }
+  }
   return g;
 }
 
-// Build one product mesh (already sized for a shelf). Returns a Group/Mesh whose
-// origin sits on the shelf surface (y=0 at its base).
+// Build one product (origin at its base). userData carries the spec for interaction.
 export function buildProduct(spec) {
-  let obj, half;
+  let obj;
   switch (spec.kind) {
-    case 'can': { const h = 0.15, r = 0.045; obj = canProduct(spec, r, h); obj.position.y = h / 2; half = h; break; }
-    case 'bag': { const w = 0.16, h = 0.22, d = 0.06; obj = bagProduct(spec, w, h, d); obj.position.y = h / 2; half = h; break; }
-    case 'carton': { const w = 0.09, h = 0.24, d = 0.09; obj = cartonProduct(spec, w, h, d); half = h; break; }
-    default: { const w = 0.15, h = 0.24, d = 0.07; obj = boxProduct(spec, w, h, d); obj.position.y = h / 2; half = h; break; }
+    case 'can': obj = canProduct(spec, 0.045, 0.15); obj.position.y = 0.075; break;
+    case 'jar': obj = jarProduct(spec, 0.05, 0.16); break;
+    case 'bottle': obj = bottleProduct(spec, 0.05, 0.3); break;
+    case 'bag': obj = bagProduct(spec, 0.16, 0.22, 0.055); obj.position.y = 0.11; break;
+    case 'carton': obj = cartonProduct(spec, 0.09, 0.24, 0.09); break;
+    case 'cup': obj = cupProduct(spec, 0.045, 0.09); break;
+    case 'tub': obj = tubProduct(spec, 0.07, 0.13); break;
+    case 'produce': obj = fruit(spec); break;
+    case 'boxwide': obj = boxProduct(spec, 0.24, 0.16, 0.1); obj.position.y = 0.08; break;
+    case 'boxtall': obj = boxProduct(spec, 0.17, 0.3, 0.09); obj.position.y = 0.15; break;
+    default: obj = boxProduct(spec, 0.15, 0.24, 0.07); obj.position.y = 0.12; break;
   }
-  const g = new THREE.Group(); g.add(obj); g.userData = { spec, height: half };
+  const g = new THREE.Group();
+  g.add(obj);
+  g.userData.spec = spec;
   return g;
 }

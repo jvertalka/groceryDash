@@ -22,6 +22,10 @@ const FILES = [
   [tex('beige_wall_001', 'arm'),    'tex/wall/arm.jpg'],
   [tex('beige_wall_001', 'nor_gl'), 'tex/wall/nor.jpg'],
 
+  [tex('wood_planks', 'diff'),   'tex/wood/diff.jpg'],
+  [tex('wood_planks', 'arm'),    'tex/wood/arm.jpg'],
+  [tex('wood_planks', 'nor_gl'), 'tex/wood/nor.jpg'],
+
   [`${GH}/Soldier.glb`, 'models/shopper.glb'],
 ];
 

@@ -8,7 +8,9 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { loadEnvironment } from './env.js';
 import { buildStore, STORE } from './store.js';
-import { loadShoppers } from './characters.js';
+import { createShoppers } from './characters.js';
+import { createGame } from './game.js';
+import { SFX } from './sfx.js';
 
 const boot = document.getElementById('boot');
 const bootbar = document.getElementById('bootbar');
@@ -20,21 +22,21 @@ try {
   // ---------------------------------------------------------------- renderer
   const app = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  renderer.toneMappingExposure = 1.12;
   app.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 100);
+  const camera = new THREE.PerspectiveCamera(62, (innerWidth / innerHeight) || 16 / 9, 0.1, 100);
 
   // ---------------------------------------------------------------- loading UI
   const manager = new THREE.LoadingManager();
   manager.onProgress = (_u, loaded, total) => { bootbar.style.width = `${Math.round((loaded / total) * 100)}%`; };
-  manager.onLoad = () => { bootmsg.textContent = 'Ready'; boot.style.opacity = '0'; setTimeout(() => (boot.style.display = 'none'), 650); hint.style.opacity = '1'; setTimeout(() => (hint.style.opacity = '0'), 5000); };
+  manager.onLoad = () => { bootmsg.textContent = 'Ready'; boot.style.opacity = '0'; setTimeout(() => (boot.style.display = 'none'), 650); hint.style.opacity = '1'; setTimeout(() => (hint.style.opacity = '0'), 6000); };
   const texLoader = new THREE.TextureLoader(manager);
 
   // ---------------------------------------------------------------- world
@@ -44,32 +46,28 @@ try {
   bootmsg.textContent = 'Building store…';
   const world = buildStore(scene, texLoader);
   camera.position.copy(world.spawn);
+  camera.lookAt(0, 1.5, 0);
 
-  bootmsg.textContent = 'Filling shelves…';
-  const shoppers = loadShoppers(scene, manager, [
-    { x: -2.2, z: 3, rot: Math.PI, moving: false },
-    { x: 2.2, z: -2, rot: 0.4, moving: true },
-    { x: -2.2, z: -6, rot: -1.2, moving: false },
-    { x: 6.6, z: 4, rot: 2.4, moving: true },
-  ]);
+  const shoppers = createShoppers(scene, manager, world);
+  const game = createGame(scene, camera, world);
 
   // ---------------------------------------------------------------- post
-  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType });
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 2, type: THREE.HalfFloatType });
   const composer = new EffectComposer(renderer, rt);
   composer.addPass(new RenderPass(scene, camera));
   const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
-  gtao.blendIntensity = 0.9;
-  try { gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1, thickness: 1, scale: 1, samples: 16, screenSpaceRadius: false }); } catch (e) {}
+  gtao.blendIntensity = 0.85;
+  try { gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1, thickness: 1, scale: 1, samples: 8, screenSpaceRadius: false }); } catch (e) {}
   composer.addPass(gtao);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.6, 0.92);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.26, 0.6, 0.93);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
   // ---------------------------------------------------------------- controls
   const controls = new PointerLockControls(camera, renderer.domElement);
   scene.add(controls.getObject());
-  addEventListener('click', () => { if (boot.style.display === 'none') controls.lock(); });
-  controls.addEventListener('lock', () => { crosshair.style.display = 'block'; hint.style.opacity = '0'; });
+  addEventListener('click', () => { if (boot.style.display === 'none' && !controls.isLocked) controls.lock(); });
+  controls.addEventListener('lock', () => { SFX.start(); crosshair.style.display = 'block'; hint.style.opacity = '0'; });
   controls.addEventListener('unlock', () => { crosshair.style.display = 'none'; });
 
   const keys = {};
@@ -77,31 +75,58 @@ try {
   addEventListener('keyup', (e) => (keys[e.code] = false));
 
   const R = 0.34, SPEED = 3.1;
-  const hitsShelf = (x, z) => world.colliders.some((c) => x > c.minX - R && x < c.maxX + R && z > c.minZ - R && z < c.maxZ + R);
+  const hits = (x, z) => world.colliders.some((c) => x > c.minX - R && x < c.maxX + R && z > c.minZ - R && z < c.maxZ + R);
+  let bob = 0;
   function move(dt) {
     const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
     const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
-    if (!f && !s) return;
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
-    const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
-    const vx = (dir.x * f + right.x * s), vz = (dir.z * f + right.z * s);
-    const len = Math.hypot(vx, vz) || 1;
-    const p = camera.position;
-    const nx = p.x + (vx / len) * SPEED * dt, nz = p.z + (vz / len) * SPEED * dt;
-    const b = world.bounds;
-    if (nx > b.minX && nx < b.maxX && !hitsShelf(nx, p.z)) p.x = nx;
-    if (nz > b.minZ && nz < b.maxZ && !hitsShelf(p.x, nz)) p.z = nz;
-    p.y = 1.65;
+    const moving = (f || s) && controls.isLocked;
+    if (moving) {
+      const dir = new THREE.Vector3();
+      camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+      const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+      const vx = dir.x * f + right.x * s, vz = dir.z * f + right.z * s;
+      const len = Math.hypot(vx, vz) || 1;
+      const p = camera.position;
+      const nx = p.x + (vx / len) * SPEED * dt, nz = p.z + (vz / len) * SPEED * dt;
+      const b = world.bounds;
+      if (nx > b.minX && nx < b.maxX && !hits(nx, p.z)) p.x = nx;
+      if (nz > b.minZ && nz < b.maxZ && !hits(p.x, nz)) p.z = nz;
+      bob += dt * 10.5;
+    }
+    camera.position.y = 1.65 + (moving ? Math.sin(bob) * 0.03 : 0);
   }
 
   // ---------------------------------------------------------------- loop
+  // Adaptive quality: if the average frame cost is high on this GPU, shed the
+  // expensive passes (GTAO, supersampling) instead of letting the game chug.
+  let frames = 0, acc = 0, perfMode = false;
+  function autoQuality(dt) {
+    if (frames === 3) {
+      // store geometry is static — render each shadow map once, then freeze it
+      scene.traverse((o) => { if (o.isSpotLight) { o.shadow.needsUpdate = true; o.shadow.autoUpdate = false; } });
+    }
+    if (!perfMode) {
+      if (frames > 30 && frames <= 120) acc += dt;
+      if (frames === 120 && acc / 90 > 0.03) {
+        perfMode = true;
+        gtao.enabled = false;
+        renderer.setPixelRatio(1);
+        composer.setSize(innerWidth, innerHeight);
+        window.__perfMode = true;
+      }
+    }
+    frames++;
+  }
   const clock = new THREE.Clock();
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
+    autoQuality(dt);
     move(dt);
+    world.update(dt, camera);
     shoppers.update(dt);
+    game.update(dt, controls.isLocked);
     composer.render();
   }
   animate();
@@ -116,8 +141,8 @@ try {
   // debug / verification hooks
   Object.assign(window, {
     __scene: scene, __camera: camera, __renderer: renderer, __composer: composer,
-    __controls: controls, __world: world, __STORE: STORE, __ready: true,
-    __lookAt: (x, y, z, px, py, pz) => { if (px !== undefined) camera.position.set(px, py, pz); camera.lookAt(x, y, z); composer.render(); },
+    __controls: controls, __world: world, __STORE: STORE, __game: game,
+    __stock: world.stock, __npcs: shoppers.npcs, __npcUpdate: shoppers.update, __ready: true,
   });
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
