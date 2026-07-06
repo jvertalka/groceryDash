@@ -474,6 +474,63 @@ function firstPersonCart() {
 }
 firstPersonCart();
 
+// ================================================================ SOUND
+// Procedural SFX via WebAudio — no audio files. Started on the first click
+// (pointer lock), which is the required user gesture to unlock audio.
+const SFX = (() => {
+  let actx = null, master = null, ambient = null, muted = false;
+  function ensure() {
+    if (actx) return true;
+    try { actx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { return false; }
+    master = actx.createGain(); master.gain.value = 0.5; master.connect(actx.destination);
+    return true;
+  }
+  function env(node, t0, dur, peak) {
+    const g = actx.createGain();
+    g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(peak, t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    node.connect(g); g.connect(master); return g;
+  }
+  function tone(freq, dur, type, peak, slideTo) {
+    if (!actx || muted) return; const t0 = actx.currentTime;
+    const o = actx.createOscillator(); o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t0);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    env(o, t0, dur, peak == null ? 0.3 : peak); o.start(t0); o.stop(t0 + dur + 0.03);
+  }
+  function noise(dur, peak, filterFreq) {
+    if (!actx || muted) return; const t0 = actx.currentTime;
+    const n = Math.floor(actx.sampleRate * dur), buf = actx.createBuffer(1, n, actx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = filterFreq || 1200; src.connect(f);
+    env(f, t0, dur, peak == null ? 0.3 : peak); src.start(t0);
+  }
+  function startAmbient() {
+    if (!actx || ambient) return;
+    const n = Math.floor(actx.sampleRate * 2), buf = actx.createBuffer(1, n, actx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = actx.createBufferSource(); src.buffer = buf; src.loop = true;
+    const f = actx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 280;
+    ambient = actx.createGain(); ambient.gain.value = 0.02;
+    src.connect(f); f.connect(ambient); ambient.connect(master); src.start();
+  }
+  return {
+    start() { if (!ensure()) return; if (actx.state === 'suspended') actx.resume(); startAmbient(); },
+    toggleMute() { muted = !muted; if (master) master.gain.value = muted ? 0 : 0.5; return muted; },
+    grab() { tone(520, 0.12, 'triangle', 0.25, 780); },
+    scan() { tone(900, 0.06, 'square', 0.16); },
+    steal() { tone(360, 0.2, 'sawtooth', 0.28, 170); },
+    recover() { tone(520, 0.14, 'triangle', 0.28, 840); },
+    bump() { noise(0.14, 0.28, 500); tone(150, 0.12, 'sine', 0.2, 90); },
+    smash() { noise(0.22, 0.35, 3200); tone(120, 0.18, 'sine', 0.25, 60); },
+    step() { noise(0.05, 0.06, 320); },
+    clunk() { tone(200, 0.1, 'square', 0.2, 130); },
+    jingle() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.16, 'triangle', 0.26), i * 90)); },
+    fail() { [400, 320, 240].forEach((f, i) => setTimeout(() => tone(f, 0.24, 'sawtooth', 0.24), i * 140)); },
+  };
+})();
+
 // ================================================================ GAME LOGIC
 // Core loop ported from the porting bible: shopping list -> walk up & grab ->
 // score -> checkout. Plus wandering NPC shoppers for life.
@@ -575,12 +632,12 @@ function grab(it) {
     else {
       it.grabbed = true;
       spawnFlyer(it.mesh, detach(it), () => rival.g.position.clone().setY(1.0), null, 1);
-      rival.target = it.pos.clone(); showEmote(rival, 'Mine!');
+      rival.target = it.pos.clone(); showEmote(rival, 'Mine!'); SFX.steal();
       toast('🛒 A shopper grabbed the ' + it.name + ' first!');
       return;
     }
   }
-  it.grabbed = true; GAME.cart++;
+  it.grabbed = true; GAME.cart++; SFX.grab();
   if (it.id === 'eggs' || it.id === 'cake') cartFragiles.push({ id: it.id, name: it.name });
   // detach the product from the shelf and send it flying into the cart
   spawnFlyer(it.mesh, detach(it), cartWorld, () => { addCartMini(it.shape, it.color, it.name); if (fpCart) fpCart.position.y = -0.05; }, 1);
@@ -737,7 +794,7 @@ function steal(n) {
   if (sdef) spawnFlyer(product(sdef[0], sdef[1], sdef[2]), cartWorld(), () => n.g.position.clone().setY(1.0), null, 0.4);
   n.stolen = entry; n.state = 'flee'; n.speed = 2.4 + GAME.round * 0.2; n.target = farCorner();
   renderList(); renderScore();
-  toast('🦹 A shopper snatched your ' + entry.name + '! Chase them — press E!');
+  SFX.steal(); toast('🦹 A shopper snatched your ' + entry.name + '! Chase them — press E!');
 }
 function fleeingThiefNear(r) {
   for (const n of npcs) if (n.state === 'flee' && n.stolen && n.g.position.distanceTo(camera.position) < r) return n;
@@ -751,7 +808,7 @@ function recover(n) {
   if (rdef) spawnFlyer(product(rdef[0], rdef[1], rdef[2]), n.g.position.clone().setY(1.0), cartWorld, () => addCartMini(rdef[0], rdef[1], rdef[2]), 0.4);
   n.stolen = null; n.state = 'wander'; setThiefLook(n, false); n.speed = n.baseSpeed; n.target = randomWalkable();
   renderList(); renderScore();
-  toast('✓ Got your ' + e.name + ' back! +10');
+  SFX.recover(); toast('✓ Got your ' + e.name + ' back! +10');
 }
 
 // --- master per-frame game update ---
@@ -825,7 +882,7 @@ function doCheckout() {
   let i = 0;
   scanEl.style.display = 'block';
   const tick = () => {
-    if (i < total) { if (cartMinis.length) removeCartMini(); i++; scanEl.textContent = '🔊 Scanning… ' + i + '/' + total; setTimeout(tick, 150); }
+    if (i < total) { if (cartMinis.length) removeCartMini(); SFX.scan(); i++; scanEl.textContent = '🔊 Scanning… ' + i + '/' + total; setTimeout(tick, 150); }
     else { scanEl.style.display = 'none'; GAME.scanning = false; advanceRound(); }
   };
   setTimeout(tick, 250);
@@ -847,12 +904,12 @@ function togglePark() {
     const cf = camera.getWorldDirection(new THREE.Vector3()); parkedCart.rotation.y = Math.atan2(cf.x, cf.z);
     scene.add(parkedCart);
     GAME.parkedPos = new THREE.Vector3(camera.position.x, 0, camera.position.z);
-    toast('Cart parked — press P near it to grab it back');
+    SFX.clunk(); toast('Cart parked — press P near it to grab it back');
   } else {
     if (GAME.parkedPos && camera.position.distanceTo(GAME.parkedPos) < 1.9) {
       GAME.parked = false; if (fpCart) fpCart.visible = true;
       if (parkedCart) { scene.remove(parkedCart); parkedCart = null; }
-      toast('Got your cart');
+      SFX.clunk(); toast('Got your cart');
     } else toast('Walk back to your cart to grab it');
   }
 }
@@ -880,11 +937,11 @@ function advanceRound() {
   // reset any in-progress thief for the new round
   for (const n of npcs) { if (n.state !== 'wander') { n.state = 'wander'; n.stolen = null; setThiefLook(n, false); n.speed = n.baseSpeed; n.target = randomWalkable(); } }
   renderScore();
-  toast('✓ Round ' + cleared + ' cleared!  +' + (300 + timeBonus) + '   →  Round ' + GAME.round);
+  SFX.jingle(); toast('✓ Round ' + cleared + ' cleared!  +' + (300 + timeBonus) + '   →  Round ' + GAME.round);
 }
 function gameOver() {
   if (GAME.over) return;
-  GAME.over = true;
+  GAME.over = true; SFX.fail();
   let best = +(localStorage.getItem('gd_best') || 0);
   const newBest = GAME.score > best; best = Math.max(best, GAME.score);
   try { localStorage.setItem('gd_best', best); } catch (e) {}
@@ -905,14 +962,28 @@ const controls = new PointerLockControls(camera, renderer.domElement);
 const overlay = document.getElementById('overlay');
 const crosshair = document.getElementById('crosshair');
 overlay.addEventListener('click', () => controls.lock());
-controls.addEventListener('lock', () => { overlay.style.display = 'none'; crosshair.style.display = 'block'; startGame(); });
+function showTitle() {
+  const best = +(localStorage.getItem('gd_best') || 0);
+  overlay.querySelector('.card').innerHTML = `
+    <h1 style="margin:0 0 4px;letter-spacing:.5px">GROCERY DASH <span style="opacity:.5">3D</span></h1>
+    <p style="margin:2px 0 14px;opacity:.85">Grab your list · dodge the crowd · beat the clock.</p>
+    <div style="font-size:13px;line-height:2;opacity:.92;text-align:left;display:inline-block;padding:10px 16px;border:1px solid rgba(255,255,255,.14);border-radius:10px;background:rgba(255,255,255,.03)">
+      <b>WASD / arrows</b> &nbsp;move &nbsp;·&nbsp; <b>mouse</b> &nbsp;look<br>
+      <b>E</b> &nbsp;grab item · checkout · catch a thief<br>
+      <b>P</b> &nbsp;park / grab cart &nbsp;·&nbsp; <b>M</b> &nbsp;mute &nbsp;·&nbsp; <b>Esc</b> &nbsp;pause
+    </div>
+    <p style="margin:14px 0 2px;font-size:15px">🏆 Best score: <b>${best}</b></p>
+    <p class="keys" style="margin-top:6px">▶ Click to start</p>`;
+}
+showTitle();
+controls.addEventListener('lock', () => { SFX.start(); overlay.style.display = 'none'; crosshair.style.display = 'block'; startGame(); });
 controls.addEventListener('unlock', () => {
   overlay.style.display = 'flex'; crosshair.style.display = 'none';
-  if (GAME.started && !GAME.over) overlay.querySelector('.card').innerHTML = '<h1>Paused</h1><p>Click to resume</p><p class="keys">WASD + mouse · E grab/checkout</p>';
+  if (GAME.started && !GAME.over) overlay.querySelector('.card').innerHTML = '<h1>Paused</h1><p>Click to resume</p><p class="keys">WASD + mouse · E grab/checkout · M mute</p>';
 });
 
 const keys = {};
-addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE') interact(); if (e.code === 'KeyP') togglePark(); requestRender(); });
+addEventListener('keydown', e => { keys[e.code] = true; if (e.code === 'KeyE') interact(); if (e.code === 'KeyP') togglePark(); if (e.code === 'KeyM') toast(SFX.toggleMute() ? '🔇 Muted' : '🔊 Sound on'); requestRender(); });
 addEventListener('keyup', e => { keys[e.code] = false; requestRender(); });
 
 const PLAYER_R = 0.35, SPEED = 3.2;
@@ -927,6 +998,7 @@ function blocked(x, z) {
 const clock = new THREE.Clock();
 const fwd = new THREE.Vector3(), right = new THREE.Vector3();
 let _bob = 0; // head-bob phase
+let _lastStep = 0; // last footstep half-cycle, for step SFX
 let _shake = 0; // camera impact shake
 let _crashCd = 0; // cooldown so the shelf-crash tip doesn't spam
 let pvx = 0, pvz = 0; // player velocity (for ice slide)
@@ -965,8 +1037,8 @@ function frame() {
     if (!blocked(nx, p.z)) p.x = nx; else { if (Math.abs(pvx) > SPEED * 0.55) crashed = true; pvx = 0; }
     if (!blocked(p.x, nz)) p.z = nz; else { if (Math.abs(pvz) > SPEED * 0.55) crashed = true; pvz = 0; }
     const speed2 = pvx * pvx + pvz * pvz;
-    if (moving || speed2 > 0.04) _bob += dt * 11;
-    if (crashed && _crashCd <= 0) { _crashCd = 1.1; _shake = 0.35; if (fpCart) fpCart.rotation.z = (Math.random() < 0.5 ? 1 : -1) * 0.22; toast('🛒💥 Mind the shelf!'); }
+    if (moving || speed2 > 0.04) { _bob += dt * 11; const _seg = Math.floor(_bob / Math.PI); if (_seg !== _lastStep) { _lastStep = _seg; SFX.step(); } }
+    if (crashed && _crashCd <= 0) { _crashCd = 1.1; _shake = 0.35; SFX.bump(); if (fpCart) fpCart.rotation.z = (Math.random() < 0.5 ? 1 : -1) * 0.22; toast('🛒💥 Mind the shelf!'); }
     frostEl.style.opacity = onIce ? '1' : '0';
     camera.position.y = 1.62 + ((moving || speed2 > 0.04) ? Math.sin(_bob) * 0.035 : 0) + (_shake > 0 ? (Math.random() - 0.5) * _shake * 0.14 : 0); // bob + impact shake
     // shove shoppers you walk into
@@ -977,14 +1049,14 @@ function frame() {
         if (d2 < 0.64 && n.stun <= 0) {
           const d = Math.sqrt(d2) || 1; n.vx = dx / d * 4.5; n.vz = dz / d * 4.5; n.stun = 0.7;
           if (n.state === 'wander') n.target = randomWalkable();
-          _shake = 0.3; toast(BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]); showEmote(n, '!');
+          _shake = 0.3; SFX.bump(); toast(BUMP_LINES[Math.floor(Math.random() * BUMP_LINES.length)]); showEmote(n, '!');
           // a hard bump can smash a fragile item out of your cart
           if (cartFragiles.length && Math.random() < 0.5) {
             const f = cartFragiles.pop();
             GAME.cart = Math.max(0, GAME.cart - 1); removeCartMini();
             const le = GAME.list.find(x => x.id === f.id && x.got > 0); if (le) le.got--;
             GAME.score = Math.max(0, GAME.score - 10);
-            dropSplat(f.id, camera.position);
+            dropSplat(f.id, camera.position); SFX.smash();
             toast('💥 Your ' + f.name + ' smashed! −10'); renderList(); renderScore();
           }
         }
@@ -1017,7 +1089,7 @@ addEventListener('resize', () => {
 window.__scene = scene; window.__renderer = renderer; window.__camera = camera; window.__composer = composer;
 window.__GAME = GAME; window.__shelfItems = shelfItems; window.__npcs = npcs;
 window.__startGame = startGame; window.__grab = grab; window.__interact = interact; window.__advanceRound = advanceRound; window.__gameOver = gameOver; window.__nearestNeeded = nearestNeeded;
-window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark; window.__doCheckout = doCheckout; window.__cartFragiles = cartFragiles; window.__frozenZones = frozenZones; window.__entranceDoors = entranceDoors; window.__nearFrozen = nearFrozen; window.__showEmote = showEmote;
+window.__updateNpcs = updateNpcs; window.__updateGame = updateGame; window.__steal = steal; window.__recover = recover; window.__fleeingThiefNear = fleeingThiefNear; window.__cartMinis = cartMinis; window.__pickThief = pickThief; window.__setThiefLook = setThiefLook; window.__updateFlyers = updateFlyers; window.__flyers = flyers; window.__togglePark = togglePark; window.__doCheckout = doCheckout; window.__cartFragiles = cartFragiles; window.__frozenZones = frozenZones; window.__entranceDoors = entranceDoors; window.__nearFrozen = nearFrozen; window.__showEmote = showEmote; window.__SFX = SFX; window.__showTitle = showTitle;
 window.__ready = true;
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
