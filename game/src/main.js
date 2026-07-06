@@ -1,0 +1,129 @@
+import * as THREE from 'three';
+import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+
+import { loadEnvironment } from './env.js';
+import { buildStore, STORE } from './store.js';
+import { loadShoppers } from './characters.js';
+
+const boot = document.getElementById('boot');
+const bootbar = document.getElementById('bootbar');
+const bootmsg = document.getElementById('bootmsg');
+const crosshair = document.getElementById('crosshair');
+const hint = document.getElementById('hint');
+
+try {
+  // ---------------------------------------------------------------- renderer
+  const app = document.getElementById('app');
+  const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  app.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.1, 100);
+
+  // ---------------------------------------------------------------- loading UI
+  const manager = new THREE.LoadingManager();
+  manager.onProgress = (_u, loaded, total) => { bootbar.style.width = `${Math.round((loaded / total) * 100)}%`; };
+  manager.onLoad = () => { bootmsg.textContent = 'Ready'; boot.style.opacity = '0'; setTimeout(() => (boot.style.display = 'none'), 650); hint.style.opacity = '1'; setTimeout(() => (hint.style.opacity = '0'), 5000); };
+  const texLoader = new THREE.TextureLoader(manager);
+
+  // ---------------------------------------------------------------- world
+  bootmsg.textContent = 'Lighting…';
+  loadEnvironment(renderer, scene, manager).catch((e) => (window.__err = 'env: ' + e));
+
+  bootmsg.textContent = 'Building store…';
+  const world = buildStore(scene, texLoader);
+  camera.position.copy(world.spawn);
+
+  bootmsg.textContent = 'Filling shelves…';
+  const shoppers = loadShoppers(scene, manager, [
+    { x: -2.2, z: 3, rot: Math.PI, moving: false },
+    { x: 2.2, z: -2, rot: 0.4, moving: true },
+    { x: -2.2, z: -6, rot: -1.2, moving: false },
+    { x: 6.6, z: 4, rot: 2.4, moving: true },
+  ]);
+
+  // ---------------------------------------------------------------- post
+  const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 4, type: THREE.HalfFloatType });
+  const composer = new EffectComposer(renderer, rt);
+  composer.addPass(new RenderPass(scene, camera));
+  const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
+  gtao.blendIntensity = 0.9;
+  try { gtao.updateGtaoMaterial({ radius: 0.45, distanceExponent: 1, thickness: 1, scale: 1, samples: 16, screenSpaceRadius: false }); } catch (e) {}
+  composer.addPass(gtao);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.6, 0.92);
+  composer.addPass(bloom);
+  composer.addPass(new OutputPass());
+
+  // ---------------------------------------------------------------- controls
+  const controls = new PointerLockControls(camera, renderer.domElement);
+  scene.add(controls.getObject());
+  addEventListener('click', () => { if (boot.style.display === 'none') controls.lock(); });
+  controls.addEventListener('lock', () => { crosshair.style.display = 'block'; hint.style.opacity = '0'; });
+  controls.addEventListener('unlock', () => { crosshair.style.display = 'none'; });
+
+  const keys = {};
+  addEventListener('keydown', (e) => (keys[e.code] = true));
+  addEventListener('keyup', (e) => (keys[e.code] = false));
+
+  const R = 0.34, SPEED = 3.1;
+  const hitsShelf = (x, z) => world.colliders.some((c) => x > c.minX - R && x < c.maxX + R && z > c.minZ - R && z < c.maxZ + R);
+  function move(dt) {
+    const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
+    const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+    if (!f && !s) return;
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+    const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+    const vx = (dir.x * f + right.x * s), vz = (dir.z * f + right.z * s);
+    const len = Math.hypot(vx, vz) || 1;
+    const p = camera.position;
+    const nx = p.x + (vx / len) * SPEED * dt, nz = p.z + (vz / len) * SPEED * dt;
+    const b = world.bounds;
+    if (nx > b.minX && nx < b.maxX && !hitsShelf(nx, p.z)) p.x = nx;
+    if (nz > b.minZ && nz < b.maxZ && !hitsShelf(p.x, nz)) p.z = nz;
+    p.y = 1.65;
+  }
+
+  // ---------------------------------------------------------------- loop
+  const clock = new THREE.Clock();
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    move(dt);
+    shoppers.update(dt);
+    composer.render();
+  }
+  animate();
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    composer.setSize(innerWidth, innerHeight);
+    gtao.setSize(innerWidth, innerHeight);
+  });
+
+  // debug / verification hooks
+  Object.assign(window, {
+    __scene: scene, __camera: camera, __renderer: renderer, __composer: composer,
+    __controls: controls, __world: world, __STORE: STORE, __ready: true,
+    __lookAt: (x, y, z, px, py, pz) => { if (px !== undefined) camera.position.set(px, py, pz); camera.lookAt(x, y, z); composer.render(); },
+  });
+} catch (e) {
+  window.__err = (e && e.stack) || String(e);
+  bootmsg && (bootmsg.textContent = 'Error — see console');
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'position:fixed;inset:0;margin:0;padding:16px;color:#f77;background:#111;font:12px monospace;white-space:pre-wrap;z-index:99;overflow:auto';
+  pre.textContent = window.__err;
+  document.body.appendChild(pre);
+}

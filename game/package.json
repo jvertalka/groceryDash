@@ -1,0 +1,19 @@
+{
+  "name": "grocery-dash-3d",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Grocery Dash — a real first-person 3D supermarket, built on three.js with a proper asset pipeline (CC0 PBR textures, HDRI lighting, rigged characters).",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "fetch-assets": "node scripts/fetch-assets.mjs"
+  },
+  "dependencies": {
+    "three": "^0.160.1"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
