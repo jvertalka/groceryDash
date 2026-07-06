@@ -28,6 +28,12 @@ const FILES = [
 
   // casual civilian (jeans + shirt), rigged, baked walk loop — Khronos sample (CC-BY 4.0 / Cesium)
   ['https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb', 'models/shopper.glb'],
+  // animation DONOR (mixamorig Idle/Walk clips, retargeted onto the Rocketbox
+  // civilians at runtime — the soldier itself is never shown)
+  ['https://cdn.jsdelivr.net/gh/mrdoob/three.js@r160/examples/models/gltf/Soldier.glb', 'models/anims.glb'],
+  // NOTE: models/people/* (Microsoft Rocketbox civilians, MIT) are fetched +
+  // TGA->JPG converted by a one-time pipeline — see CREDITS.md. The converted
+  // set is committed to the repo, so no re-download is needed.
 ];
 
 let ok = 0, fail = 0;
