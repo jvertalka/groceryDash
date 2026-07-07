@@ -27,7 +27,7 @@ try {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.18;
   app.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -59,7 +59,7 @@ try {
   gtao.blendIntensity = 0.85;
   try { gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1, thickness: 1, scale: 1, samples: 8, screenSpaceRadius: false }); } catch (e) {}
   composer.addPass(gtao);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.26, 0.6, 0.93);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.34, 0.62, 0.92);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 

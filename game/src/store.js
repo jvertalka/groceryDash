@@ -367,48 +367,166 @@ const buildingTex = () => canvasTex(512, 256, (x) => {
   }
   x.globalAlpha = 1;
 });
-function car(color) {
-  const g = new THREE.Group();
-  const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.32, metalness: 0.75, envMapIntensity: 1.4, fog: false });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.52, 4.1), paint); body.position.y = 0.42; g.add(body);
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.5, 2.1), new THREE.MeshStandardMaterial({ color: 0x11151c, roughness: 0.12, metalness: 0.4, envMapIntensity: 1.6, fog: false }));
-  cabin.position.set(0, 0.9, -0.2); g.add(cabin);
-  const wheelG = new THREE.CylinderGeometry(0.31, 0.31, 0.22, 14);
-  const wheelM = new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false });
-  for (const dz of [-1.35, 1.35]) for (const dx of [-0.82, 0.82]) {
-    const w = new THREE.Mesh(wheelG, wheelM); w.rotation.z = Math.PI / 2; w.position.set(dx, 0.31, dz); g.add(w);
-  }
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 0.04), new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff2a1a, emissiveIntensity: 0.7, fog: false }));
-  tail.position.set(0, 0.62, 2.06); g.add(tail);
+// Shaped cars: the body is a side-profile Shape extruded across the car's
+// width with a beveled edge, so hood/windshield/roof/trunk read correctly in
+// silhouette — three profiles (sedan / SUV / hatchback) for lot variety.
+const CAR_PROFILES = {
+  sedan: [[-2.1, 0.3], [-2.08, 0.62], [-1.5, 0.68], [-0.85, 0.72], [-0.42, 1.24], [0.68, 1.22], [1.25, 0.78], [1.95, 0.7], [2.1, 0.62], [2.1, 0.32]],
+  suv: [[-2.15, 0.32], [-2.12, 0.72], [-1.45, 0.8], [-0.95, 0.84], [-0.6, 1.5], [1.55, 1.46], [1.95, 0.9], [2.15, 0.8], [2.15, 0.34]],
+  hatch: [[-1.8, 0.3], [-1.78, 0.6], [-1.2, 0.66], [-0.62, 0.7], [-0.2, 1.3], [1.0, 1.28], [1.55, 0.62], [1.8, 0.56], [1.8, 0.32]],
+};
+function carBodyGeo(kind, width) {
+  const pts = CAR_PROFILES[kind];
+  const shape = new THREE.Shape();
+  shape.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) shape.lineTo(pts[i][0], pts[i][1]);
+  shape.closePath();
+  const g = new THREE.ExtrudeGeometry(shape, { depth: width, bevelEnabled: true, bevelSize: 0.07, bevelThickness: 0.06, bevelSegments: 2, steps: 1 });
+  g.translate(0, 0, -width / 2);
   return g;
 }
-function exterior(scene) {
+const _carGeoCache = {};
+function car(color, kind = 'sedan') {
+  const g = new THREE.Group();
+  const key = kind;
+  if (!_carGeoCache[key]) {
+    _carGeoCache[key] = { body: carBodyGeo(kind, 1.62), glass: carBodyGeo(kind, 1.46) };
+  }
+  const paint = new THREE.MeshStandardMaterial({ color, roughness: 0.3, metalness: 0.72, envMapIntensity: 1.5, fog: false });
+  const body = new THREE.Mesh(_carGeoCache[key].body, paint);
+  body.rotation.y = Math.PI / 2; g.add(body);
+  // dark glass cabin: a narrower copy of the upper body, peeking through
+  const glassM = new THREE.MeshStandardMaterial({ color: 0x0c1016, roughness: 0.1, metalness: 0.4, envMapIntensity: 1.7, fog: false });
+  const glass = new THREE.Mesh(_carGeoCache[key].glass, glassM);
+  glass.rotation.y = Math.PI / 2; glass.scale.set(1, 1.015, 0.94); g.add(glass);
+  // wheels + hubcaps
+  const wheelG = new THREE.CylinderGeometry(0.31, 0.31, 0.24, 16);
+  const wheelM = new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false });
+  const hubG = new THREE.CylinderGeometry(0.14, 0.14, 0.26, 12);
+  const hubM = new THREE.MeshStandardMaterial({ color: 0x8f969c, roughness: 0.3, metalness: 0.9, fog: false });
+  const wl = kind === 'hatch' ? 1.1 : 1.35;
+  for (const dz of [-wl, wl]) for (const dx of [-0.78, 0.78]) {
+    const w = new THREE.Mesh(wheelG, wheelM); w.rotation.z = Math.PI / 2; w.position.set(dx, 0.31, dz); g.add(w);
+    const h2 = new THREE.Mesh(hubG, hubM); h2.rotation.z = Math.PI / 2; h2.position.set(dx * 1.01, 0.31, dz); g.add(h2);
+  }
+  // lights + plate
+  const len = CAR_PROFILES[kind][0][0] * -1;
+  const headM = new THREE.MeshStandardMaterial({ color: 0xd8dee6, emissive: 0xbfd4e6, emissiveIntensity: 0.25, roughness: 0.2, fog: false });
+  for (const dx of [-0.52, 0.52]) {
+    const hl = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.06), headM);
+    hl.position.set(dx, 0.62, -len - 0.02); g.add(hl);
+  }
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.09, 0.05), new THREE.MeshStandardMaterial({ color: 0x550000, emissive: 0xff2a1a, emissiveIntensity: 0.65, fog: false }));
+  tail.position.set(0, 0.66, len * (kind === 'hatch' ? 0.99 : 1.0) + 0.02); g.add(tail);
+  const plate = new THREE.Mesh(new THREE.PlaneGeometry(0.34, 0.12), new THREE.MeshStandardMaterial({ color: 0xe8ebee, roughness: 0.5, fog: false }));
+  plate.position.set(0, 0.42, len + 0.055); g.add(plate);
+  // side mirrors
+  const mirM = new THREE.MeshStandardMaterial({ color, roughness: 0.35, metalness: 0.6, fog: false });
+  for (const s of [-1, 1]) {
+    const mir = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.09, 0.1), mirM);
+    mir.position.set(s * 0.88, 0.95, -0.55); g.add(mir);
+  }
+  return g;
+}
+function exterior(scene, loader) {
   const zFront = STORE.d / 2;
-  // sky dome + ground
+  // sky dome + asphalt ground
   const dome = new THREE.Mesh(new THREE.SphereGeometry(85, 24, 12), new THREE.MeshBasicMaterial({ map: skyTex(), side: THREE.BackSide, fog: false }));
   dome.position.set(0, 0, zFront); scene.add(dome);
-  const lot = new THREE.Mesh(new THREE.PlaneGeometry(140, 90), new THREE.MeshStandardMaterial({ color: 0x191c21, roughness: 0.95, fog: false }));
+  const lotMat = loadPBR(loader, 'asphalt', [26, 17], { fog: false, envMapIntensity: 0.35 });
+  const lot = new THREE.Mesh(new THREE.PlaneGeometry(140, 90), lotMat);
   lot.rotation.x = -Math.PI / 2; lot.position.set(0, -0.02, zFront + 45); scene.add(lot);
-  const walk = new THREE.Mesh(new THREE.BoxGeometry(46, 0.09, 3.2), new THREE.MeshStandardMaterial({ color: 0x8d939a, roughness: 0.9, fog: false }));
-  walk.position.set(0, 0.045 - 0.02, zFront + 1.7); scene.add(walk);
-  // parking stripes + cars
+  // sidewalk + curb face
+  const walk = new THREE.Mesh(new THREE.BoxGeometry(46, 0.12, 3.2), new THREE.MeshStandardMaterial({ color: 0x8d939a, roughness: 0.9, fog: false }));
+  walk.position.set(0, 0.04, zFront + 1.7); scene.add(walk);
+  const curb = new THREE.Mesh(new THREE.BoxGeometry(46, 0.14, 0.12), new THREE.MeshStandardMaterial({ color: 0xa8aeb4, roughness: 0.8, fog: false }));
+  curb.position.set(0, 0.05, zFront + 3.36); scene.add(curb);
+  // crosswalk from the doors to the lot
+  {
+    const cwG = new THREE.PlaneGeometry(0.5, 3.4);
+    const cwM = new THREE.MeshBasicMaterial({ color: 0xd8dce0, transparent: true, opacity: 0.42, fog: false });
+    const cw = new THREE.InstancedMesh(cwG, cwM, 5);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < 5; i++) {
+      m.makeRotationX(-Math.PI / 2);
+      m.setPosition(-1.6 + i * 0.8, 0.002, zFront + 5.2);
+      cw.setMatrixAt(i, m);
+    }
+    cw.instanceMatrix.needsUpdate = true; scene.add(cw);
+  }
+  // parking stripes + concrete wheel stops
   const stripeG = new THREE.PlaneGeometry(0.14, 4.6);
   const stripeM = new THREE.MeshBasicMaterial({ color: 0xd8dce0, transparent: true, opacity: 0.5, fog: false });
   const stripes = new THREE.InstancedMesh(stripeG, stripeM, 12);
+  const bumpG = new THREE.BoxGeometry(1.55, 0.14, 0.22);
+  const bumpM = new THREE.MeshStandardMaterial({ color: 0xb8b46e, roughness: 0.85, fog: false });
+  const bumps = new THREE.InstancedMesh(bumpG, bumpM, 11);
   const m4 = new THREE.Matrix4();
   for (let i = 0; i < 12; i++) {
     m4.makeRotationX(-Math.PI / 2);
     m4.setPosition(-14 + i * 2.6, 0.001, zFront + 7.8);
     stripes.setMatrixAt(i, m4);
+    if (i < 11) {
+      m4.identity(); m4.setPosition(-14 + i * 2.6 + 1.3, 0.07, zFront + 5.9);
+      bumps.setMatrixAt(i, m4);
+    }
   }
   stripes.instanceMatrix.needsUpdate = true; scene.add(stripes);
-  const carColors = [0x8a1f1f, 0x1f3f6e, 0xb9bcc0, 0x24282d, 0x4a5a4a];
-  [[-12.7, 0.15], [-7.5, -0.1], [-2.3, 0.05], [5.5, -0.12], [10.7, 0.08]].forEach(([cx, jitter], i) => {
-    const c = car(carColors[i % carColors.length]);
-    c.position.set(cx, 0, zFront + 7.8 + (i % 2 ? 0.3 : -0.2));
+  bumps.instanceMatrix.needsUpdate = true; scene.add(bumps);
+  // oil stains
+  const stainTex = canvasTex(256, 256, (x) => {
+    x.clearRect(0, 0, 256, 256);
+    for (const [cx, cy, r, a] of [[128, 128, 80, 0.5], [95, 150, 46, 0.4], [170, 100, 34, 0.35]]) {
+      const g = x.createRadialGradient(cx, cy, 4, cx, cy, r);
+      g.addColorStop(0, `rgba(8,8,10,${a})`); g.addColorStop(1, 'rgba(8,8,10,0)');
+      x.fillStyle = g; x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+    }
+  });
+  [[-9.2, 8.6, 1.7], [3.0, 9.4, 2.2], [-1.4, 12.5, 1.4]].forEach(([sx, sz, ss], i) => {
+    const st = new THREE.Mesh(new THREE.PlaneGeometry(ss, ss), new THREE.MeshBasicMaterial({ map: stainTex, transparent: true, depthWrite: false, fog: false }));
+    st.rotation.x = -Math.PI / 2; st.rotation.z = i * 1.7;
+    st.position.set(sx, 0.004, zFront + sz); scene.add(st);
+  });
+  // parked cars — mixed body styles
+  const fleet = [
+    [-12.7, 0.15, 0x8a1f1f, 'suv'], [-7.5, -0.1, 0x1f3f6e, 'sedan'], [-2.3, 0.05, 0xb9bcc0, 'hatch'],
+    [5.5, -0.12, 0x24282d, 'sedan'], [10.7, 0.08, 0x4a5a4a, 'suv'],
+  ];
+  for (let i = 0; i < fleet.length; i++) {
+    const [cx, jitter, color, kind] = fleet[i];
+    const c = car(color, kind);
+    c.position.set(cx, 0, zFront + 7.9 + (i % 2 ? 0.3 : -0.2));
     c.rotation.y = jitter + (i % 2 ? Math.PI : 0);
     scene.add(c);
-  });
+  }
+  // red bollards guarding the storefront
+  for (const bx of [-4.6, -2.5, 2.5, 4.6]) {
+    const b = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.1, 0.85, 12), new THREE.MeshStandardMaterial({ color: 0xb3261a, roughness: 0.45, fog: false }));
+    b.position.set(bx, 0.42, zFront + 3.7); scene.add(b);
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.09, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xb3261a, roughness: 0.45, fog: false }));
+    cap.position.set(bx, 0.85, zFront + 3.7); scene.add(cap);
+  }
+  // outdoor cart-return corral with roof + abandoned carts
+  {
+    const g = new THREE.Group();
+    const postM = new THREE.MeshStandardMaterial({ color: 0x5c636a, metalness: 0.85, roughness: 0.4, fog: false });
+    for (const [px, pz] of [[-1.5, -1.1], [1.5, -1.1], [-1.5, 1.1], [1.5, 1.1]]) {
+      const p = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.2, 10), postM);
+      p.position.set(px, 1.1, pz); g.add(p);
+    }
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.07, 2.8), new THREE.MeshStandardMaterial({ color: 0x9c2a20, roughness: 0.5, fog: false }));
+    roof.position.y = 2.25; roof.rotation.z = 0.05; g.add(roof);
+    for (const s of [-1, 1]) {
+      const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 2.9, 8), postM);
+      rail.rotation.z = Math.PI / 2; rail.rotation.y = 0; rail.position.set(0, 0.5, s * 1.0);
+      rail.rotation.set(Math.PI / 2, 0, Math.PI / 2); g.add(rail);
+    }
+    const c1 = shoppingCart(); c1.rotation.y = Math.PI / 2 + 0.12; c1.position.set(-0.6, 0, 0.1); g.add(c1);
+    const c2 = shoppingCart(); c2.rotation.y = Math.PI / 2 - 0.07; c2.position.set(0.5, 0, -0.15); g.add(c2);
+    g.traverse((o) => { if (o.isMesh && o.material && o.material.fog !== false) { o.material = o.material.clone(); o.material.fog = false; } });
+    g.position.set(13.4, 0, zFront + 6.4);
+    scene.add(g);
+  }
   // lamp posts with fake light pools
   for (const lx of [-9, 8]) {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 5.6, 8), new THREE.MeshStandardMaterial({ color: 0x2f3338, roughness: 0.6, metalness: 0.8, fog: false }));
@@ -436,11 +554,23 @@ function lighting(scene) {
   const zs = []; for (let z = -10.5; z <= 11; z += 2.8) zs.push(z);
   const trofferMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 3.0, roughness: 1 });
   const troffers = new THREE.InstancedMesh(new THREE.BoxGeometry(0.34, 0.05, 2.1), trofferMat, corridorXs.length * zs.length);
+  // fake floor reflections: an additive smear under every troffer sells a
+  // freshly waxed supermarket floor for the cost of one more instanced draw
+  const streaks = new THREE.InstancedMesh(
+    new THREE.PlaneGeometry(0.5, 3.1),
+    new THREE.MeshBasicMaterial({ color: 0xfff3dd, transparent: true, opacity: 0.085, blending: THREE.AdditiveBlending, depthWrite: false }),
+    corridorXs.length * zs.length,
+  );
   const m = new THREE.Matrix4();
   let ti = 0;
-  for (const x of corridorXs) for (const z of zs) { m.makeTranslation(x, y - 0.03, z); troffers.setMatrixAt(ti++, m); }
+  for (const x of corridorXs) for (const z of zs) {
+    m.makeTranslation(x, y - 0.03, z); troffers.setMatrixAt(ti, m);
+    m.makeRotationX(-Math.PI / 2); m.setPosition(x, 0.012, z); streaks.setMatrixAt(ti, m);
+    ti++;
+  }
   troffers.instanceMatrix.needsUpdate = true;
-  scene.add(troffers);
+  streaks.instanceMatrix.needsUpdate = true; streaks.computeBoundingSphere();
+  scene.add(troffers, streaks);
 
   for (const x of [-8, 0, 8]) rectLight(scene, x, 0, 0.6, 19, 5.2);
   rectLight(scene, 0, 9.4, 0.6, 15, 4.0, Math.PI / 2);
@@ -767,7 +897,7 @@ export function buildStore(scene, loader) {
 
   // waxed look via low roughness + boosted env reflection (clearcoat is too
   // costly per-pixel on integrated GPUs for a floor this large)
-  const floorMat = loadPBR(loader, 'floor', [w / 2, d / 2], { roughness: 0.55, envMapIntensity: 1.35 });
+  const floorMat = loadPBR(loader, 'floor', [w / 2, d / 2], { roughness: 0.42, envMapIntensity: 1.5 });
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), floorMat);
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
 
@@ -780,6 +910,18 @@ export function buildStore(scene, loader) {
   mkWall(wallMat, w, 0, -d / 2, 0);
   mkWall(wallMatZ, d, -w / 2, 0, Math.PI / 2);
   mkWall(wallMatZ, d, w / 2, 0, -Math.PI / 2);
+  // brand accent band around the walls — reads as designed interior, not warehouse
+  {
+    const bandM = PAINTED(0x1d5c38, 0.55);
+    const mkBand = (W, x, z, ry) => {
+      const b = new THREE.Mesh(new THREE.BoxGeometry(W, 0.42, 0.04), bandM);
+      b.position.set(x, 2.52, z); b.rotation.y = ry; scene.add(b);
+    };
+    mkBand(w, 0, -d / 2 + 0.05, 0);
+    mkBand(d, -w / 2 + 0.05, 0, Math.PI / 2);
+    mkBand(d, w / 2 - 0.05, 0, -Math.PI / 2);
+    mkBand(w, 0, d / 2 - 0.07, Math.PI);
+  }
   // storefront: glass panels with mullions flanking the door gap, so the
   // parking lot reads through from inside
   {
@@ -862,7 +1004,7 @@ export function buildStore(scene, loader) {
   const doors = entrance(scene);
 
   // set dressing (endcaps + checkout racks add product slots — before buildStock)
-  exterior(scene);
+  exterior(scene, loader);
   endcaps(scene, slots, colliders, rng);
   palletStacks(scene, colliders, rng);
   checkoutExtras(scene, slots, rng);

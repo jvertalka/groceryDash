@@ -26,6 +26,10 @@ const FILES = [
   [tex('wood_planks', 'arm'),    'tex/wood/arm.jpg'],
   [tex('wood_planks', 'nor_gl'), 'tex/wood/nor.jpg'],
 
+  [tex('asphalt_02', 'diff'),   'tex/asphalt/diff.jpg'],
+  [tex('asphalt_02', 'arm'),    'tex/asphalt/arm.jpg'],
+  [tex('asphalt_02', 'nor_gl'), 'tex/asphalt/nor.jpg'],
+
   // casual civilian (jeans + shirt), rigged, baked walk loop — Khronos sample (CC-BY 4.0 / Cesium)
   ['https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models@master/2.0/CesiumMan/glTF-Binary/CesiumMan.glb', 'models/shopper.glb'],
   // animation DONOR (mixamorig Idle/Walk clips, retargeted onto the Rocketbox
