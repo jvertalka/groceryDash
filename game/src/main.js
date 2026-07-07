@@ -22,7 +22,7 @@ try {
   // ---------------------------------------------------------------- renderer
   const app = document.getElementById('app');
   const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -36,7 +36,19 @@ try {
   // ---------------------------------------------------------------- loading UI
   const manager = new THREE.LoadingManager();
   manager.onProgress = (_u, loaded, total) => { bootbar.style.width = `${Math.round((loaded / total) * 100)}%`; };
-  manager.onLoad = () => { bootmsg.textContent = 'Ready'; boot.style.opacity = '0'; setTimeout(() => (boot.style.display = 'none'), 650); hint.style.opacity = '1'; setTimeout(() => (hint.style.opacity = '0'), 6000); };
+  manager.onLoad = () => {
+    // pay the shader-compile storm HERE, behind the boot screen, instead of
+    // freezing the first rendered frame for many seconds on integrated GPUs
+    bootmsg.textContent = 'Preparing shaders…';
+    requestAnimationFrame(() => {
+      try { renderer.compile(scene, camera); } catch (e) {}
+      bootmsg.textContent = 'Ready';
+      boot.style.opacity = '0';
+      setTimeout(() => (boot.style.display = 'none'), 650);
+      hint.style.opacity = '1';
+      setTimeout(() => (hint.style.opacity = '0'), 6000);
+    });
+  };
   const texLoader = new THREE.TextureLoader(manager);
 
   // ---------------------------------------------------------------- world
@@ -58,6 +70,7 @@ try {
   const gtao = new GTAOPass(scene, camera, innerWidth, innerHeight);
   gtao.blendIntensity = 0.85;
   try { gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1, thickness: 1, scale: 1, samples: 8, screenSpaceRadius: false }); } catch (e) {}
+  gtao.enabled = false; // lite tier by default; autoQuality upgrades on fast GPUs
   composer.addPass(gtao);
   // threshold .96 means only true emitters (troffers, LEDs, screens) bloom —
   // ordinary bright surfaces stay clean
@@ -133,29 +146,39 @@ try {
   }
 
   // ---------------------------------------------------------------- loop
-  // Adaptive quality: if the average frame cost is high on this GPU, shed the
-  // expensive passes (GTAO, supersampling) instead of letting the game chug.
-  let frames = 0, acc = 0, perfMode = false;
+  // Progressive quality: START in the lite tier (no GTAO, no rect-area wash
+  // lights, half the shadow spots) so weak GPUs are smooth from frame one,
+  // then UPGRADE if the GPU proves fast. Starting heavy and degrading later
+  // meant integrated GPUs chugged through the first several seconds.
+  let frames = 0, acc = 0, tier = 'lite';
+  {
+    let si = 0;
+    scene.traverse((o) => {
+      if (o.isRectAreaLight) o.visible = false;
+      if (o.isSpotLight && si++ % 2 === 1) o.castShadow = false;
+    });
+  }
+  function applyHigh() {
+    tier = 'high';
+    gtao.enabled = true;
+    scene.traverse((o) => {
+      if (o.isRectAreaLight) o.visible = true;
+      if (o.isSpotLight) { o.castShadow = true; o.shadow.needsUpdate = true; }
+    });
+  }
   function autoQuality(dt) {
     if (frames === 3) {
       // store geometry is static — render each shadow map once, then freeze it
       scene.traverse((o) => { if (o.isSpotLight) { o.shadow.needsUpdate = true; o.shadow.autoUpdate = false; } });
     }
-    if (!perfMode) {
-      if (frames > 30 && frames <= 120) acc += dt;
-      if (frames === 120 && acc / 90 > 0.03) {
-        perfMode = true;
-        gtao.enabled = false;
-        renderer.setPixelRatio(1);
-        composer.setSize(innerWidth, innerHeight);
-        // shed the per-pixel light cost too: rect-area wash lights off,
-        // every other shadow spot becomes shadowless
-        let si = 0;
-        scene.traverse((o) => {
-          if (o.isRectAreaLight) o.visible = false;
-          if (o.isSpotLight && si++ % 2 === 1) o.castShadow = false;
-        });
-        window.__perfMode = true;
+    if (tier === 'lite') {
+      if (frames > 20 && frames <= 80) acc += dt;
+      if (frames === 80) {
+        const avg = acc / 60;
+        if (avg < 0.02) applyHigh(); // headroom for the pretty passes
+        else if (avg > 0.055) { renderer.setPixelRatio(1); composer.setSize(innerWidth, innerHeight); tier = 'panic'; }
+        else tier = 'lite-locked';
+        window.__tier = tier;
       }
     }
     frames++;

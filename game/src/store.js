@@ -128,17 +128,22 @@ function gondola(localSlots, tagSlots, length, sectionsByFace, rng) {
   const hdr = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.16, length), PAINTED(0xf2f4f6, 0.6));
   hdr.position.y = H + 0.08; g.add(hdr);
 
+  // all slabs/rails of the gondola merge into 2 meshes (was 16 draws)
+  const slabGeos = [], railGeos = [];
   for (const face of [1, -1]) {
     const sections = sectionsByFace[face === 1 ? 0 : 1];
     for (let si = 0; si < shelfYs.length; si++) {
       const y = shelfYs[si];
-      const slab = new THREE.Mesh(new THREE.BoxGeometry(HD, 0.03, length), shelfMetal);
-      slab.position.set(face * HD / 2, y - 0.015, 0); slab.castShadow = slab.receiveShadow = true; g.add(slab);
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.055, length), PAINTED(0xf7f9fb, 0.55));
-      rail.position.set(face * (HD - 0.006), y - 0.03, 0); g.add(rail);
+      const sg = new THREE.BoxGeometry(HD, 0.03, length);
+      sg.translate(face * HD / 2, y - 0.015, 0); slabGeos.push(sg);
+      const rg = new THREE.BoxGeometry(0.012, 0.055, length);
+      rg.translate(face * (HD - 0.006), y - 0.03, 0); railGeos.push(rg);
       stockShelf(localSlots, tagSlots, face, HD, y, length, sections[si % sections.length], rng);
     }
   }
+  const slabs = new THREE.Mesh(mergeGeometries(slabGeos), shelfMetal);
+  slabs.castShadow = slabs.receiveShadow = true; g.add(slabs);
+  g.add(new THREE.Mesh(mergeGeometries(railGeos), PAINTED(0xf7f9fb, 0.55)));
   return g;
 }
 
@@ -149,14 +154,18 @@ function wallShelf(localSlots, tagSlots, length, sections, rng) {
   bp.position.set(-D / 2, H / 2, 0); bp.receiveShadow = true; g.add(bp);
   const kb = new THREE.Mesh(new THREE.BoxGeometry(D, 0.12, length), PAINTED(0x2b3038, 0.5));
   kb.position.y = 0.06; g.add(kb);
+  const slabGeos = [], railGeos = [];
   for (let si = 0; si < shelfYs.length; si++) {
     const y = shelfYs[si];
-    const slab = new THREE.Mesh(new THREE.BoxGeometry(D, 0.03, length), METAL(0xc4cace, 0.34));
-    slab.position.set(0, y - 0.015, 0); slab.castShadow = slab.receiveShadow = true; g.add(slab);
-    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.055, length), PAINTED(0xf7f9fb, 0.55));
-    rail.position.set(D / 2 - 0.006, y - 0.03, 0); g.add(rail);
+    const sg = new THREE.BoxGeometry(D, 0.03, length);
+    sg.translate(0, y - 0.015, 0); slabGeos.push(sg);
+    const rg = new THREE.BoxGeometry(0.012, 0.055, length);
+    rg.translate(D / 2 - 0.006, y - 0.03, 0); railGeos.push(rg);
     stockShelf(localSlots, tagSlots, 1, D / 2 + 0.16, y, length, sections[si % sections.length], rng);
   }
+  const slabs = new THREE.Mesh(mergeGeometries(slabGeos), METAL(0xc4cace, 0.34));
+  slabs.castShadow = slabs.receiveShadow = true; g.add(slabs);
+  g.add(new THREE.Mesh(mergeGeometries(railGeos), PAINTED(0xf7f9fb, 0.55)));
   return g;
 }
 
@@ -172,30 +181,39 @@ function freezerWall(scene, slots, rng) {
   const pool = bySection('frozen');
   const unitX = -(STORE.w / 2 - D - 0.02);
 
+  // every repeated part is ONE InstancedMesh across all 10 doors
+  const parts = [
+    { geo: new THREE.BoxGeometry(D, H, pitch), mat: innerMat, per: [[D / 2, H / 2, 0, 0]] },
+    { geo: new THREE.BoxGeometry(D - 0.2, 0.025, W - 0.12), mat: METAL(0xb9c0c7, 0.4), per: [0.5, 0.95, 1.4].map((sy) => [D / 2 - 0.04, sy, 0, 0]) },
+    { geo: new THREE.BoxGeometry(0.02, 0.02, W - 0.14), mat: ledMat, per: [0.5, 0.95, 1.4].map((sy) => [0.1, sy + 0.32, 0, 0]) },
+    { geo: new THREE.BoxGeometry(0.05, H, W), mat: frame, per: [[-0.02, H / 2, 0, 0]] },
+    { geo: new THREE.PlaneGeometry(W - 0.14, H - 0.18), mat: glassMat, per: [[-0.05, H / 2, 0, -Math.PI / 2]] },
+    { geo: new THREE.CylinderGeometry(0.016, 0.016, 0.5, 8), mat: METAL(0xd7dde3, 0.25), per: [[-0.09, H / 2, W / 2 - 0.14, 0]] },
+  ];
+  const mUnit = new THREE.Matrix4(), mLocal = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  for (const part of parts) {
+    const im = new THREE.InstancedMesh(part.geo, part.mat, doors * part.per.length);
+    let ii = 0;
+    for (let i = 0; i < doors; i++) {
+      const z = -((doors - 1) * pitch) / 2 + i * pitch;
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI); // face +x
+      mUnit.compose(p.set(unitX, 0, z), q, one);
+      for (const [lx, ly, lz, lry] of part.per) {
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), lry);
+        mLocal.compose(p.set(lx, ly, lz), q, one);
+        im.setMatrixAt(ii++, new THREE.Matrix4().multiplyMatrices(mUnit, mLocal));
+      }
+    }
+    im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+    g.add(im);
+  }
+  // frozen stock slots (world coords, unchanged)
   for (let i = 0; i < doors; i++) {
     const z = -((doors - 1) * pitch) / 2 + i * pitch;
-    const u = new THREE.Group();
-    const box = new THREE.Mesh(new THREE.BoxGeometry(D, H, pitch), innerMat);
-    box.position.set(D / 2, H / 2, 0); u.add(box);
-    for (const sy of [0.5, 0.95, 1.4]) {
-      const sh = new THREE.Mesh(new THREE.BoxGeometry(D - 0.2, 0.025, W - 0.12), METAL(0xb9c0c7, 0.4));
-      sh.position.set(D / 2 - 0.04, sy, 0); u.add(sh);
-      for (let k = 0; k < 3; k++) {
-        const spec = pool[Math.floor(rng() * pool.length)];
-        slots.push({ spec, x: unitX - (D / 2 - 0.04), y: sy + 0.013, z: z - 0.3 + k * 0.3, rotY: Math.PI / 2, grabbable: false });
-      }
-      const led = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.02, W - 0.14), ledMat);
-      led.position.set(0.1, sy + 0.32, 0); u.add(led);
+    for (const sy of [0.5, 0.95, 1.4]) for (let k = 0; k < 3; k++) {
+      const spec = pool[Math.floor(rng() * pool.length)];
+      slots.push({ spec, x: unitX - (D / 2 - 0.04), y: sy + 0.013, z: z - 0.3 + k * 0.3, rotY: Math.PI / 2, grabbable: false });
     }
-    const fr = new THREE.Mesh(new THREE.BoxGeometry(0.05, H, W), frame);
-    fr.position.set(-0.02, H / 2, 0); u.add(fr);
-    const glass = new THREE.Mesh(new THREE.PlaneGeometry(W - 0.14, H - 0.18), glassMat);
-    glass.position.set(-0.05, H / 2, 0); glass.rotation.y = -Math.PI / 2; u.add(glass);
-    const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.5, 8), METAL(0xd7dde3, 0.25));
-    handle.position.set(-0.09, H / 2, W / 2 - 0.14); u.add(handle);
-    u.position.set(unitX, 0, z);
-    u.rotation.y = Math.PI; // face +x, into the grocery aisles
-    g.add(u);
   }
   const band = new THREE.Mesh(new THREE.BoxGeometry(D, 0.5, doors * pitch), PAINTED(0x173a63, 0.6));
   band.position.set(-(STORE.w / 2 - D / 2 - 0.02), H + 0.25, 0);
@@ -249,25 +267,27 @@ function checkoutLanes(scene) {
   const colliders = [];
   const beltMat = new THREE.MeshStandardMaterial({ color: 0x14171a, roughness: 0.28, metalness: 0.2, envMapIntensity: 1.4 });
   const counterMat = PAINTED(0xd8dde2, 0.55);
+  // each repeated lane part merges across all 6 lanes (30 draws -> 5)
+  const geos = { counter: [], belt: [], bag: [], reader: [], pole: [] };
+  const lampMeshes = [];
   for (let i = 0; i < 6; i++) {
-    const x = -10.5 + i * 1.9;
-    const g = new THREE.Group();
-    const counter = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.92, 2.6), counterMat);
-    counter.position.y = 0.46; counter.castShadow = counter.receiveShadow = true; g.add(counter);
-    const belt = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.04, 1.7), beltMat);
-    belt.position.set(0, 0.94, -0.2); g.add(belt);
-    const bag = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.06, 0.7), METAL(0xb9c0c7, 0.3));
-    bag.position.set(0, 0.95, 1.0); g.add(bag);
-    const reader = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.18, 0.1), PLASTIC(0x22262a, 0.4));
-    reader.position.set(0.45, 1.06, 0.5); reader.rotation.z = -0.25; g.add(reader);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.5, 10), METAL(0x9aa1a8, 0.4));
-    pole.position.set(0, 1.65, 1.15); g.add(pole);
+    const x = -10.5 + i * 1.9, z = 10.6;
+    const cg = new THREE.BoxGeometry(0.72, 0.92, 2.6); cg.translate(x, 0.46, z); geos.counter.push(cg);
+    const bg = new THREE.BoxGeometry(0.5, 0.04, 1.7); bg.translate(x, 0.94, z - 0.2); geos.belt.push(bg);
+    const gg = new THREE.BoxGeometry(0.72, 0.06, 0.7); gg.translate(x, 0.95, z + 1.0); geos.bag.push(gg);
+    const rg = new THREE.BoxGeometry(0.12, 0.18, 0.1); rg.rotateZ(-0.25); rg.translate(x + 0.45, 1.06, z + 0.5); geos.reader.push(rg);
+    const pg = new THREE.CylinderGeometry(0.025, 0.025, 1.5, 10); pg.translate(x, 1.65, z + 1.15); geos.pole.push(pg);
     const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.26, 0.06), new THREE.MeshStandardMaterial({ map: laneNumTex(String(i + 1)), emissive: 0x8affb0, emissiveIntensity: 0.2, emissiveMap: laneNumTex(String(i + 1)), roughness: 0.6 }));
-    lamp.position.set(0, 2.45, 1.15); g.add(lamp);
-    g.position.set(x, 0, 10.6);
-    scene.add(g);
-    colliders.push({ minX: x - 0.4, maxX: x + 0.4, minZ: 10.6 - 1.35, maxZ: 10.6 + 1.35 });
+    lamp.position.set(x, 2.45, z + 1.15); lampMeshes.push(lamp);
+    colliders.push({ minX: x - 0.4, maxX: x + 0.4, minZ: z - 1.35, maxZ: z + 1.35 });
   }
+  const counters = new THREE.Mesh(mergeGeometries(geos.counter), counterMat);
+  counters.castShadow = counters.receiveShadow = true; scene.add(counters);
+  scene.add(new THREE.Mesh(mergeGeometries(geos.belt), beltMat));
+  scene.add(new THREE.Mesh(mergeGeometries(geos.bag), METAL(0xb9c0c7, 0.3)));
+  scene.add(new THREE.Mesh(mergeGeometries(geos.reader), PLASTIC(0x22262a, 0.4)));
+  scene.add(new THREE.Mesh(mergeGeometries(geos.pole), METAL(0x9aa1a8, 0.4)));
+  for (const l of lampMeshes) scene.add(l);
   hangingSign(scene, bannerTex('CHECKOUT', '#8a5a12'), 3.4, -5.75, 2.95, 10.6);
   return { colliders, point: new THREE.Vector3(-7.65, 0, 11.1) };
 }
@@ -453,22 +473,11 @@ function car(color, kind = 'sedan') {
   const glassM = new THREE.MeshStandardMaterial({ color: 0x0c1016, roughness: 0.1, metalness: 0.4, envMapIntensity: 1.7, fog: false });
   const glass = new THREE.Mesh(_carGeoCache[key].glass, glassM);
   glass.rotation.y = Math.PI / 2; glass.scale.set(1, 1.015, 0.94); g.add(glass);
-  // wheels + hubcaps
-  const wheelG = new THREE.CylinderGeometry(0.31, 0.31, 0.24, 16);
-  const wheelM = new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false });
-  const hubG = new THREE.CylinderGeometry(0.14, 0.14, 0.26, 12);
-  const hubM = new THREE.MeshStandardMaterial({ color: 0x8f969c, roughness: 0.3, metalness: 0.9, fog: false });
+  // wheel positions recorded; the actual wheel/hub/arch meshes are built once
+  // as fleet-wide InstancedMeshes in exterior() (saves ~90 draws)
   const wl = kind === 'hatch' ? 1.1 : 1.35;
-  // dark wheel arches — the single biggest "real car" silhouette cue
-  const archG = new THREE.TorusGeometry(0.36, 0.055, 8, 16, Math.PI);
-  const archM = new THREE.MeshStandardMaterial({ color: 0x0e1013, roughness: 0.9, fog: false });
-  for (const dz of [-wl, wl]) for (const dx of [-0.78, 0.78]) {
-    const w = new THREE.Mesh(wheelG, wheelM); w.rotation.z = Math.PI / 2; w.position.set(dx, 0.31, dz); g.add(w);
-    const h2 = new THREE.Mesh(hubG, hubM); h2.rotation.z = Math.PI / 2; h2.position.set(dx * 1.01, 0.31, dz); g.add(h2);
-    const arch = new THREE.Mesh(archG, archM);
-    arch.rotation.y = Math.PI / 2; arch.position.set(dx * 1.06, 0.31, dz);
-    g.add(arch);
-  }
+  g.userData.wheelLocals = [];
+  for (const dz of [-wl, wl]) for (const dx of [-0.78, 0.78]) g.userData.wheelLocals.push([dx, dz]);
   // lights + plate
   const len = CAR_PROFILES[kind][0][0] * -1;
   const headM = new THREE.MeshStandardMaterial({ color: 0xd8dee6, emissive: 0xbfd4e6, emissiveIntensity: 0.25, roughness: 0.2, fog: false });
@@ -553,12 +562,34 @@ function exterior(scene, loader) {
     [-7.5, -0.1, 0x1f3f6e, 'sedan'], [-2.3, 0.05, 0xb9bcc0, 'hatch'],
     [5.5, -0.12, 0x24282d, 'sedan'], [10.7, 0.08, 0x4a5a4a, 'suv'], [15.9, -0.05, 0x2e5648, 'hatch'],
   ];
+  const wheelXf = [], hubXf = [], archXf = [];
   for (let i = 0; i < fleet.length; i++) {
     const [cx, jitter, color, kind] = fleet[i];
     const c = car(color, kind);
     c.position.set(cx, 0, zFront + 7.9 + (i % 2 ? 0.3 : -0.2));
     c.rotation.y = jitter + (i % 2 ? Math.PI : 0);
     scene.add(c);
+    c.updateMatrixWorld(true);
+    for (const [dx, dz] of c.userData.wheelLocals) {
+      const lw = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lw.setPosition(dx, 0.31, dz);
+      wheelXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lw));
+      const lh = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lh.setPosition(dx * 1.01, 0.31, dz);
+      hubXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lh));
+      const la = new THREE.Matrix4().makeRotationY(Math.PI / 2); la.setPosition(dx * 1.06, 0.31, dz);
+      archXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, la));
+    }
+  }
+  // fleet-wide wheels/hubs/arches: 3 draws for every car on the lot
+  const wheelSets = [
+    [new THREE.CylinderGeometry(0.31, 0.31, 0.24, 16), new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false }), wheelXf],
+    [new THREE.CylinderGeometry(0.14, 0.14, 0.26, 12), new THREE.MeshStandardMaterial({ color: 0x8f969c, roughness: 0.3, metalness: 0.9, fog: false }), hubXf],
+    [new THREE.TorusGeometry(0.36, 0.055, 8, 16, Math.PI), new THREE.MeshStandardMaterial({ color: 0x0e1013, roughness: 0.9, fog: false }), archXf],
+  ];
+  for (const [geo, mat, xfs] of wheelSets) {
+    const im = new THREE.InstancedMesh(geo, mat, xfs.length);
+    xfs.forEach((m, i) => im.setMatrixAt(i, m));
+    im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+    scene.add(im);
   }
   // red bollards guarding the storefront
   for (const bx of [-4.6, -2.5, 2.5, 4.6]) {
@@ -952,6 +983,9 @@ function shirtTex(color) {
 function apparel(scene, colliders, rng) {
   const SHIRT_COLORS = ['#c9241a', '#1f6fc2', '#2e8b57', '#e8e4da', '#22262b', '#e0a01f', '#7a3fb5', '#d8688a'];
   const racks = [[5.5, 2.5], [8.5, 2.5], [11.5, 2.5], [5.5, 5.8], [8.5, 5.8], [11.5, 5.8]];
+  // shirts are ONE InstancedMesh per color (8 draws) instead of 66 unique
+  // materials — a big draw-call and shader-compile win
+  const byColor = new Map();
   for (let r = 0; r < racks.length; r++) {
     const [rx, rz] = racks[r];
     const g = new THREE.Group();
@@ -964,17 +998,33 @@ function apparel(scene, colliders, rng) {
     const baseCol = r % SHIRT_COLORS.length;
     for (let s = 0; s < 11; s++) {
       const a = (s / 11) * Math.PI * 2;
-      const shirt = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.42, 0.52),
-        new THREE.MeshStandardMaterial({ map: shirtTex(SHIRT_COLORS[(baseCol + (s % 3)) % SHIRT_COLORS.length]), transparent: true, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.85 }),
-      );
-      shirt.position.set(Math.cos(a) * 0.55, 1.12, Math.sin(a) * 0.55);
-      shirt.rotation.y = -a + Math.PI / 2 + (rng() - 0.5) * 0.2;
-      g.add(shirt);
+      const color = SHIRT_COLORS[(baseCol + (s % 3)) % SHIRT_COLORS.length];
+      if (!byColor.has(color)) byColor.set(color, []);
+      byColor.get(color).push({
+        x: rx + Math.cos(a) * 0.55, y: 1.12, z: rz + Math.sin(a) * 0.55,
+        rotY: -a + Math.PI / 2 + (rng() - 0.5) * 0.2,
+      });
     }
     g.position.set(rx, 0, rz);
     scene.add(g);
     colliders.push({ minX: rx - 0.75, maxX: rx + 0.75, minZ: rz - 0.75, maxZ: rz + 0.75 });
+  }
+  {
+    const shirtGeo = new THREE.PlaneGeometry(0.42, 0.52);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+    for (const [color, list] of byColor) {
+      const im = new THREE.InstancedMesh(
+        shirtGeo,
+        new THREE.MeshStandardMaterial({ map: shirtTex(color), transparent: true, alphaTest: 0.4, side: THREE.DoubleSide, roughness: 0.85 }),
+        list.length,
+      );
+      list.forEach((t, i) => {
+        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), t.rotY);
+        im.setMatrixAt(i, m4.compose(p.set(t.x, t.y, t.z), q, one));
+      });
+      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+      scene.add(im);
+    }
   }
   // folded-stack tables (stacks are one instanced draw with per-instance color)
   const tables = [[14.6, 2.5], [14.6, 5.8]];
