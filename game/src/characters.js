@@ -318,8 +318,8 @@ export function createShoppers(scene, manager, world) {
         path: [], pause: rand(0, 2), browsing,
       };
       if (browsing) {
-        const ax = pick(xs); const side = Math.random() < 0.5 ? -1 : 1;
-        n.x = ax + side * 1.05; n.z = rand(-7, 3);
+        const ax = pick(world.corridors.browseXs || xs); const side = Math.random() < 0.5 ? -1 : 1;
+        n.x = ax + side * 1.05; n.z = rand(-9, 3);
         n.yaw = side === 1 ? -Math.PI / 2 : Math.PI / 2;
         n.pause = Infinity;
         // basket set down beside them while they browse

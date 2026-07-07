@@ -27,7 +27,7 @@ try {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.18;
+  renderer.toneMappingExposure = 1.0;
   app.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -59,7 +59,9 @@ try {
   gtao.blendIntensity = 0.85;
   try { gtao.updateGtaoMaterial({ radius: 0.35, distanceExponent: 1, thickness: 1, scale: 1, samples: 8, screenSpaceRadius: false }); } catch (e) {}
   composer.addPass(gtao);
-  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.34, 0.62, 0.92);
+  // threshold .96 means only true emitters (troffers, LEDs, screens) bloom —
+  // ordinary bright surfaces stay clean
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.16, 0.5, 0.96);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
 
@@ -146,6 +148,13 @@ try {
         gtao.enabled = false;
         renderer.setPixelRatio(1);
         composer.setSize(innerWidth, innerHeight);
+        // shed the per-pixel light cost too: rect-area wash lights off,
+        // every other shadow spot becomes shadowless
+        let si = 0;
+        scene.traverse((o) => {
+          if (o.isRectAreaLight) o.visible = false;
+          if (o.isSpotLight && si++ % 2 === 1) o.castShadow = false;
+        });
         window.__perfMode = true;
       }
     }

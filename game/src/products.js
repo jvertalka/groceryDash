@@ -137,6 +137,30 @@ export const PRODUCTS = [
   { id: 'pizza', brand: 'Stonefire', name: 'Margherita Pizza', kind: 'boxwide', price: 5.99, bg1: '#b02318', bg2: '#701009', accent: '#ffe08a', section: 'frozen', weight: '390 g' },
   { id: 'icecream', brand: 'Polar', name: 'Vanilla Ice Cream', kind: 'tub', price: 4.29, bg1: '#eef3f8', bg2: '#bcd2e8', accent: '#8a5a2b', ink: '#173a63', section: 'frozen', weight: '1 L' },
 
+  // electronics
+  { id: 'tv55', brand: 'Vixel', name: '55" 4K TV', kind: 'boxbig', price: 379.0, bg1: '#14181f', bg2: '#0a0d12', accent: '#35c4c4', section: 'electronics', weight: '55 in' },
+  { id: 'soundbar', brand: 'Vixel', name: 'Soundbar 2.1', kind: 'boxwide', price: 89.0, bg1: '#1c2027', bg2: '#10131a', accent: '#e0a01f', section: 'electronics', weight: '80 cm' },
+  { id: 'headphones', brand: 'Aural', name: 'Headphones', kind: 'box', price: 49.0, bg1: '#2a2f38', bg2: '#171b22', accent: '#d8688a', section: 'electronics', weight: 'over-ear' },
+  { id: 'console', brand: 'PlayBox', name: 'Game Console', kind: 'box', price: 299.0, bg1: '#1f2f52', bg2: '#101a30', accent: '#48e07a', section: 'electronics', weight: '1 TB' },
+  { id: 'router', brand: 'Linkly', name: 'WiFi Router', kind: 'box', price: 59.0, bg1: '#f2f4f6', bg2: '#c9d2da', accent: '#1f6fc2', ink: '#173a63', section: 'electronics', weight: 'AX3000' },
+
+  // home
+  { id: 'blender', brand: 'MixMate', name: 'Blender', kind: 'boxtall', price: 34.0, bg1: '#c9241a', bg2: '#8a160f', accent: '#fff', section: 'home', weight: '1.5 L' },
+  { id: 'towels', brand: 'Plush', name: 'Bath Towels 2pk', kind: 'boxwide', price: 15.0, bg1: '#3a7d8c', bg2: '#245560', accent: '#f4e3c1', section: 'home', weight: '2 pk' },
+  { id: 'cookset', brand: 'ChefLine', name: 'Cookware Set', kind: 'boxbig', price: 79.0, bg1: '#33383f', bg2: '#1d2126', accent: '#e0a01f', section: 'home', weight: '10 pc' },
+  { id: 'lamp', brand: 'Glow', name: 'Desk Lamp', kind: 'boxtall', price: 19.0, bg1: '#f2e8d8', bg2: '#d8c9b0', accent: '#8a5a2b', ink: '#4a3a20', section: 'home', weight: 'LED' },
+
+  // toys
+  { id: 'toytruck', brand: 'ZoomCo', name: 'Monster Truck', kind: 'box', price: 24.0, bg1: '#e0a01f', bg2: '#b07708', accent: '#c9241a', ink: '#3a2a00', section: 'toys', weight: 'ages 3+' },
+  { id: 'blocks', brand: 'Brixo', name: 'Building Blocks', kind: 'box', price: 29.0, bg1: '#1f6fc2', bg2: '#124a85', accent: '#ffd23b', section: 'toys', weight: '250 pc' },
+  { id: 'ball', brand: 'Bounce', name: 'Play Ball', kind: 'ball', price: 4.0, bg1: '#c9241a', bg2: '#8a160f', accent: '#fff', section: 'toys', weight: '22 cm' },
+  { id: 'plush', brand: 'Snuggle', name: 'Plush Bear', kind: 'box', price: 12.0, bg1: '#8a5a2b', bg2: '#5c3a1a', accent: '#f4e3c1', section: 'toys', weight: '30 cm' },
+
+  // pharmacy
+  { id: 'meds', brand: 'Relievo', name: 'Pain Relief', kind: 'box', price: 6.5, bg1: '#f2f4f6', bg2: '#d5dde5', accent: '#c9241a', ink: '#8a1610', section: 'pharmacy', weight: '24 ct' },
+  { id: 'vitamins', brand: 'VitaDay', name: 'Multivitamin', kind: 'jar', price: 9.0, bg1: '#f2e8d8', bg2: '#e0cfae', accent: '#2e7d32', ink: '#1d4a22', section: 'pharmacy', weight: '90 ct' },
+  { id: 'bandages', brand: 'MendFast', name: 'Bandages', kind: 'boxwide', price: 3.5, bg1: '#e8ebee', bg2: '#c5ccd3', accent: '#1f6fc2', ink: '#173a63', section: 'pharmacy', weight: '40 ct' },
+
   // produce (loose, on crate tables)
   { id: 'apple', brand: 'Fresh', name: 'Gala Apples', kind: 'produce', price: 0.89, bg1: '#c62d1f', bg2: '#8a1a10', accent: '#fff', section: 'produce', weight: 'per lb' },
   { id: 'orange', brand: 'Fresh', name: 'Navel Oranges', kind: 'produce', price: 0.99, bg1: '#f28c1b', bg2: '#c56a0d', accent: '#fff', section: 'produce', weight: 'per lb' },
@@ -271,6 +295,12 @@ export function buildProduct(spec) {
     case 'produce': obj = fruit(spec); break;
     case 'boxwide': obj = boxProduct(spec, 0.24, 0.16, 0.1); obj.position.y = 0.08; break;
     case 'boxtall': obj = boxProduct(spec, 0.17, 0.3, 0.09); obj.position.y = 0.15; break;
+    case 'boxbig': obj = boxProduct(spec, 0.62, 0.42, 0.14); obj.position.y = 0.21; break;
+    case 'ball': {
+      obj = new THREE.Mesh(geo('playball', () => new THREE.SphereGeometry(0.115, 16, 12)), mat({ color: new THREE.Color(spec.bg1), roughness: 0.35, envMapIntensity: 1.3 }));
+      obj.position.y = 0.115;
+      break;
+    }
     default: obj = boxProduct(spec, 0.15, 0.24, 0.07); obj.position.y = 0.12; break;
   }
   const g = new THREE.Group();
