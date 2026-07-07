@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { clone as cloneSkinned } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { shoppingCart } from './store.js';
 
 // Realistic everyday shoppers: Microsoft Rocketbox avatars (MIT) — game-grade
 // people in casual clothes — animated by RETARGETING the Soldier donor's
@@ -291,25 +292,27 @@ export function createShoppers(scene, manager, world) {
     window.__cast = cast.map((c) => c.name);
     if (!cast.length) { window.__retargetLog.push('CAST EMPTY — no shoppers'); return; }
 
-    // 3) populate: 6 walkers + 2 browsers, cycling the cast
-    const count = 8;
-    for (let i = 0; i < count; i++) {
-      const src = cast[i % cast.length];
+    // 3) populate: 6 walkers (2 pushing carts) + 2 browsers, cycling the cast
+    const spawnPerson = (src) => {
       const model = cloneSkinned(src.fbx);
       model.scale.multiplyScalar(rand(0.96, 1.04));
       const blob = new THREE.Mesh(blobGeo, blobMat);
       blob.rotation.x = -Math.PI / 2;
       blob.scale.setScalar(0.42 / model.scale.x); blob.position.y = 0.02 / model.scale.x;
       model.add(blob);
-
       const mixer = new THREE.AnimationMixer(model);
       const idle = mixer.clipAction(src.idleClip), walk = mixer.clipAction(src.walkClip);
       idle.play(); walk.play(); walk.weight = 0; idle.weight = 1;
       idle.time = Math.random() * 2; walk.time = Math.random() * 1.2;
-
+      return { model, mixer, idle, walk };
+    };
+    const count = 8;
+    for (let i = 0; i < count; i++) {
+      const src = cast[i % cast.length];
+      const p = spawnPerson(src);
       const browsing = i >= count - 2;
       const n = {
-        model, mixer, idle, walk, oneClip: false, facing: src.facing,
+        ...p, oneClip: false, facing: src.facing,
         x: pick(xs), z: rand(zMin + 1, zMax - 1),
         yaw: rand(-Math.PI, Math.PI), speed: rand(0.8, 1.2),
         path: [], pause: rand(0, 2), browsing,
@@ -319,10 +322,29 @@ export function createShoppers(scene, manager, world) {
         n.x = ax + side * 1.05; n.z = rand(-7, 3);
         n.yaw = side === 1 ? -Math.PI / 2 : Math.PI / 2;
         n.pause = Infinity;
+        // basket set down beside them while they browse
+        const basket = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.3), new THREE.MeshStandardMaterial({ color: 0xc9241a, roughness: 0.45 }));
+        basket.position.set(n.x + Math.sin(n.yaw + Math.PI / 2) * 0.5, 0.11, n.z + Math.cos(n.yaw + Math.PI / 2) * 0.5);
+        basket.castShadow = true; scene.add(basket);
+      } else if (i === 1 || i === 4) {
+        // this shopper pushes a cart — updated to track them each frame
+        n.cart = shoppingCart();
+        scene.add(n.cart);
       }
-      model.position.set(n.x, 0, n.z);
-      model.rotation.y = n.yaw + n.facing;
-      scene.add(model);
+      n.model.position.set(n.x, 0, n.z);
+      n.model.rotation.y = n.yaw + n.facing;
+      scene.add(n.model);
+      npcs.push(n);
+    }
+    // 4) staff standing at their posts (registers, restocking)
+    for (let i = 0; i < (world.staffSpots || []).length; i++) {
+      const spot = world.staffSpots[i];
+      const src = cast[(i + 3) % cast.length];
+      const p = spawnPerson(src);
+      const n = { ...p, oneClip: false, facing: src.facing, x: spot.x, z: spot.z, yaw: spot.yaw, speed: 0, path: [], pause: Infinity, browsing: true };
+      n.model.position.set(spot.x, 0, spot.z);
+      n.model.rotation.y = spot.yaw + src.facing;
+      scene.add(n.model);
       npcs.push(n);
     }
   })().catch((e) => { window.__retargetLog.push('FATAL: ' + (e && e.message)); });
@@ -368,6 +390,12 @@ export function createShoppers(scene, manager, world) {
       n.walk.weight = Math.min(1, n.walk.weight + dt * 3);
       n.idle.weight = 1 - n.walk.weight;
       n.walk.timeScale = n.speed / 1.3;
+    }
+    // pushed carts trail their shopper
+    for (const n of npcs) {
+      if (!n.cart) continue;
+      n.cart.position.set(n.x + Math.sin(n.yaw) * 0.78, 0, n.z + Math.cos(n.yaw) * 0.78);
+      n.cart.rotation.y = n.yaw - Math.PI / 2; // handle toward the shopper
     }
   }
 
