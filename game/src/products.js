@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { hasModel, cloneModel, modelSize } from './models.js';
 
 // ============================================================ PACKAGING ART
 // Products read as real because of printed labels. We *design* them on a canvas
@@ -161,11 +162,17 @@ export const PRODUCTS = [
   { id: 'vitamins', brand: 'VitaDay', name: 'Multivitamin', kind: 'jar', price: 9.0, bg1: '#f2e8d8', bg2: '#e0cfae', accent: '#2e7d32', ink: '#1d4a22', section: 'pharmacy', weight: '90 ct' },
   { id: 'bandages', brand: 'MendFast', name: 'Bandages', kind: 'boxwide', price: 3.5, bg1: '#e8ebee', bg2: '#c5ccd3', accent: '#1f6fc2', ink: '#173a63', section: 'pharmacy', weight: '40 ct' },
 
-  // produce (loose, on crate tables)
-  { id: 'apple', brand: 'Fresh', name: 'Gala Apples', kind: 'produce', price: 0.89, bg1: '#c62d1f', bg2: '#8a1a10', accent: '#fff', section: 'produce', weight: 'per lb' },
-  { id: 'orange', brand: 'Fresh', name: 'Navel Oranges', kind: 'produce', price: 0.99, bg1: '#f28c1b', bg2: '#c56a0d', accent: '#fff', section: 'produce', weight: 'per lb' },
-  { id: 'banana', brand: 'Fresh', name: 'Bananas', kind: 'produce', price: 0.59, bg1: '#f2c81b', bg2: '#c69f0d', accent: '#3a2a00', section: 'produce', weight: 'per lb' },
-  { id: 'lettuce', brand: 'Fresh', name: 'Iceberg Lettuce', kind: 'produce', price: 1.49, bg1: '#3a9d44', bg2: '#256b2d', accent: '#fff', section: 'produce', weight: 'each' },
+  // produce (loose, on crate tables) — photoscanned models when the kit is present
+  { id: 'apple', brand: 'Fresh', name: 'Gala Apples', kind: 'produce', model: 'prod_apple', modelH: 0.085, price: 0.89, bg1: '#c62d1f', bg2: '#8a1a10', accent: '#fff', section: 'produce', weight: 'per lb' },
+  { id: 'lemon', brand: 'Fresh', name: 'Fresh Lemons', kind: 'produce', model: 'prod_lemon', modelH: 0.07, price: 0.79, bg1: '#f2c81b', bg2: '#c69f0d', accent: '#3a2a00', section: 'produce', weight: 'per lb' },
+  { id: 'banana', brand: 'Fresh', name: 'Bananas', kind: 'produce', model: 'prod_banana', modelH: 0.13, price: 0.59, bg1: '#f2c81b', bg2: '#c69f0d', accent: '#3a2a00', section: 'produce', weight: 'per lb' },
+  { id: 'avocado', brand: 'Fresh', name: 'Hass Avocados', kind: 'produce', model: 'prod_avocado', modelH: 0.08, price: 1.89, bg1: '#3a9d44', bg2: '#256b2d', accent: '#fff', section: 'produce', weight: 'each' },
+  { id: 'onion', brand: 'Fresh', name: 'Yellow Onions', kind: 'produce', model: 'prod_onion', modelH: 0.08, price: 0.69, bg1: '#e0a01f', bg2: '#b07708', accent: '#3a2a00', section: 'produce', weight: 'per lb' },
+  { id: 'sweetpotato', brand: 'Fresh', name: 'Sweet Potatoes', kind: 'produce', model: 'prod_sweetpotato', modelH: 0.07, price: 0.99, bg1: '#b3541a', bg2: '#7c380f', accent: '#fff', section: 'produce', weight: 'per lb' },
+
+  // photoscanned packaged goods (CC0, Poly Haven)
+  { id: 'tins', brand: 'Pantry', name: 'Tinned Assortment', kind: 'box', model: 'prod_tins', modelH: 0.115, price: 4.5, bg1: '#8f9aa4', bg2: '#5c666e', accent: '#c9241a', section: 'pantry', weight: '3 tins' },
+  { id: 'croissant', brand: 'Hearth', name: 'Butter Croissant', kind: 'box', model: 'prod_croissant', modelH: 0.06, price: 1.5, bg1: '#d8a45c', bg2: '#a3743a', accent: '#5c3a1a', section: 'bakery', weight: '80 g' },
 ];
 
 export const bySection = (s) => PRODUCTS.filter((p) => p.section === s);
@@ -207,15 +214,32 @@ const cmat = (key, make) => {
 const mat = (o) => new THREE.MeshStandardMaterial(o);
 const sideMat = (spec) => cmat(spec.id + ':side', () => mat({ color: new THREE.Color(spec.bg2), roughness: 0.85 }));
 
+// BoxGeometry indexes its faces in order px,nx,py,ny,pz,nz (6 indices each x6).
+// With materials [side x4, face x2] that's SIX draw calls per product batch —
+// but sides (0..23) and faces (24..35) are contiguous, so two groups suffice.
+function twoGroupBox(g) {
+  g.clearGroups();
+  g.addGroup(0, 24, 0);  // 4 sides
+  g.addGroup(24, 12, 1); // front + back
+  return g;
+}
 function boxProduct(spec, w, h, d) {
   const face = cmat(spec.id + ':face', () => mat({ map: labelTexture(spec), roughness: 0.82 }));
   const side = sideMat(spec);
-  return new THREE.Mesh(geo(`box${w}x${h}x${d}`, () => new THREE.BoxGeometry(w, h, d)), [side, side, side, side, face, face]);
+  return new THREE.Mesh(geo(`box${w}x${h}x${d}`, () => twoGroupBox(new THREE.BoxGeometry(w, h, d))), [side, face]);
 }
 function canProduct(spec, r, h) {
   const label = cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.35, metalness: 0.5 }));
   const metal = cmat('_canmetal', () => mat({ color: 0xd7dde3, roughness: 0.3, metalness: 0.95 }));
-  return new THREE.Mesh(geo(`can${r}x${h}`, () => new THREE.CylinderGeometry(r, r, h, 20, 1)), [label, metal, metal]);
+  // cylinder groups: side, top, bottom — top+bottom are contiguous, one metal group
+  return new THREE.Mesh(geo(`can${r}x${h}`, () => {
+    const g = new THREE.CylinderGeometry(r, r, h, 20, 1);
+    const [side, top, bottom] = g.groups.map((gr) => ({ ...gr }));
+    g.clearGroups();
+    g.addGroup(side.start, side.count, 0);
+    g.addGroup(top.start, top.count + bottom.count, 1);
+    return g;
+  }), [label, metal]);
 }
 function jarProduct(spec, r, h) {
   const g = new THREE.Group();
@@ -240,13 +264,22 @@ function bottleProduct(spec, r, h) {
 function bagProduct(spec, w, h, d) {
   const front = cmat(spec.id + ':face', () => mat({ map: labelTexture(spec), roughness: 0.22, metalness: 0.15, envMapIntensity: 1.35 }));
   const back = cmat(spec.id + ':bagback', () => mat({ color: new THREE.Color(spec.bg2), roughness: 0.22, metalness: 0.15 }));
-  return new THREE.Mesh(bagGeometry(w, h, d), [back, back, back, back, front, back]);
+  // merge px..ny into one back-material group; keep pz (front) + nz (back)
+  const g = bagGeometry(w, h, d);
+  if (g.groups.length > 3) {
+    const grs = g.groups.map((gr) => ({ ...gr }));
+    g.clearGroups();
+    g.addGroup(grs[0].start, grs[0].count + grs[1].count + grs[2].count + grs[3].count, 0);
+    g.addGroup(grs[4].start, grs[4].count, 1);
+    g.addGroup(grs[5].start, grs[5].count, 0);
+  }
+  return new THREE.Mesh(g, [back, front]);
 }
 function cartonProduct(spec, w, h, d) {
   const face = cmat(spec.id + ':cartonface', () => mat({ map: labelTexture(spec), roughness: 0.5 }));
   const side = sideMat(spec);
   const g = new THREE.Group();
-  const body = new THREE.Mesh(geo(`cart${w}x${h}`, () => new THREE.BoxGeometry(w, h * 0.78, d)), [side, side, side, side, face, face]);
+  const body = new THREE.Mesh(geo(`cart${w}x${h}`, () => twoGroupBox(new THREE.BoxGeometry(w, h * 0.78, d))), [side, face]);
   body.position.y = h * 0.39; g.add(body);
   const top = new THREE.Mesh(geo(`carttop${w}x${h}`, () => new THREE.BoxGeometry(w, h * 0.22, d * 0.4)), side);
   top.position.y = h * 0.89; g.add(top);
@@ -291,6 +324,17 @@ function fruit(spec) {
 
 // Build one product (origin at its base). userData carries the spec for interaction.
 export function buildProduct(spec) {
+  // real photoscanned model when the kit is loaded (geometry+materials shared
+  // via clone, so the instanced-stock pipeline batches them like everything else)
+  if (spec.model && hasModel(spec.model)) {
+    const size = modelSize(spec.model);
+    const m = cloneModel(spec.model);
+    m.scale.setScalar((spec.modelH || 0.1) / Math.max(0.001, size.y));
+    const g = new THREE.Group();
+    g.add(m);
+    g.userData.spec = spec;
+    return g;
+  }
   let obj;
   switch (spec.kind) {
     case 'can': obj = canProduct(spec, 0.045, 0.15); obj.position.y = 0.075; break;

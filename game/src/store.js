@@ -4,6 +4,7 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { loadPBR, METAL, PAINTED, PLASTIC } from './materials.js';
 import { bySection, priceTagTexture } from './products.js';
 import { buildStock } from './stock.js';
+import { hasModel, cloneModel, cloneModelAtHeight, modelSize } from './models.js';
 
 // Interior footprint (metres). Aisles run along Z.
 export const STORE = { w: 46, d: 30, h: 4.2 };
@@ -227,8 +228,8 @@ function freezerWall(scene, slots, rng) {
 function produceCorner(scene, slots, woodMat, rng) {
   const colliders = [];
   const tables = [
-    { x: -19.2, z: 9.4, id: 'apple' }, { x: -16.2, z: 9.4, id: 'orange' },
-    { x: -19.2, z: 12.0, id: 'banana' }, { x: -16.2, z: 12.0, id: 'lettuce' },
+    { x: -20.4, z: 9.4, id: 'apple' }, { x: -17.6, z: 9.4, id: 'lemon' }, { x: -14.8, z: 9.4, id: 'avocado' },
+    { x: -20.4, z: 12.0, id: 'banana', gx: 4, gz: 3, step: 0.36 }, { x: -17.6, z: 12.0, id: 'onion' }, { x: -14.8, z: 12.0, id: 'sweetpotato' },
   ];
   for (const t of tables) {
     const g = new THREE.Group();
@@ -242,13 +243,14 @@ function produceCorner(scene, slots, woodMat, rng) {
       strip.position.set(rx, 0.9, rz); g.add(strip);
     }
     const spec = bySection('produce').find((p) => p.id === t.id);
-    for (let ix = 0; ix < 7; ix++) for (let iz = 0; iz < 5; iz++) {
+    const gx = t.gx || 6, gz = t.gz || 4, step = t.step || 0.24;
+    for (let ix = 0; ix < gx; ix++) for (let iz = 0; iz < gz; iz++) {
       if (rng() < 0.12) continue;
       slots.push({
         spec,
-        x: t.x - 0.66 + ix * 0.22 + (rng() - 0.5) * 0.04,
+        x: t.x - ((gx - 1) * step) / 2 + ix * step + (rng() - 0.5) * 0.04,
         y: 0.875,
-        z: t.z - 0.38 + iz * 0.19 + (rng() - 0.5) * 0.04,
+        z: t.z - ((gz - 1) * step * 0.8) / 2 + iz * step * 0.8 + (rng() - 0.5) * 0.04,
         rotY: rng() * Math.PI * 2,
       });
     }
@@ -288,6 +290,15 @@ function checkoutLanes(scene) {
   scene.add(new THREE.Mesh(mergeGeometries(geos.reader), PLASTIC(0x22262a, 0.4)));
   scene.add(new THREE.Mesh(mergeGeometries(geos.pole), METAL(0x9aa1a8, 0.4)));
   for (const l of lampMeshes) scene.add(l);
+  // photoscanned cash registers on the two staffed lanes
+  if (hasModel('prop_register')) {
+    for (const lx of [-10.5, -8.6]) {
+      const reg = cloneModelAtHeight('prop_register', 0.34, { castShadow: true });
+      reg.position.set(lx, 0.92, 10.05);
+      reg.rotation.y = -Math.PI / 2; // screen toward the cashier
+      scene.add(reg);
+    }
+  }
   hangingSign(scene, bannerTex('CHECKOUT', '#8a5a12'), 3.4, -5.75, 2.95, 10.6);
   return { colliders, point: new THREE.Vector3(-7.65, 0, 11.1) };
 }
@@ -565,34 +576,53 @@ function exterior(scene, loader) {
     [-7.5, -0.1, 0x1f3f6e, 'sedan'], [-2.3, 0.05, 0xb9bcc0, 'hatch'],
     [5.5, -0.12, 0x24282d, 'sedan'], [10.7, 0.08, 0x4a5a4a, 'suv'], [15.9, -0.05, 0x2e5648, 'hatch'],
   ];
-  const wheelXf = [], hubXf = [], archXf = [];
-  for (let i = 0; i < fleet.length; i++) {
-    const [cx, jitter, color, kind] = fleet[i];
-    const c = car(color, kind);
-    c.position.set(cx, 0, zFront + 7.9 + (i % 2 ? 0.3 : -0.2));
-    c.rotation.y = jitter + (i % 2 ? Math.PI : 0);
-    scene.add(c);
-    c.updateMatrixWorld(true);
-    for (const [dx, dz] of c.userData.wheelLocals) {
-      const lw = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lw.setPosition(dx, 0.31, dz);
-      wheelXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lw));
-      const lh = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lh.setPosition(dx * 1.01, 0.31, dz);
-      hubXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lh));
-      const la = new THREE.Matrix4().makeRotationY(Math.PI / 2); la.setPosition(dx * 1.06, 0.31, dz);
-      archXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, la));
+  if (hasModel('car_sedan')) {
+    // real cars: Kenney Car Kit (CC0). Length axis auto-detected from the
+    // bbox so we never guess which way the models face.
+    const kitCars = ['car_sedan', 'car_suv', 'car_hatch', 'car_van', 'car_sedansport', 'car_suvlux', 'car_taxi', 'car_delivery'];
+    for (let i = 0; i < fleet.length; i++) {
+      const [cx, jitter] = fleet[i];
+      const name = kitCars[i % kitCars.length];
+      const size = modelSize(name);
+      const c = cloneModel(name, { castShadow: true });
+      const longest = Math.max(size.x, size.z);
+      c.scale.setScalar((name === 'car_van' || name === 'car_delivery' ? 4.7 : 4.25) / longest);
+      c.traverse((o) => { if (o.isMesh && o.material && o.material.fog !== false) { o.material = o.material.clone(); o.material.fog = false; } });
+      const alignFix = size.x > size.z ? Math.PI / 2 : 0; // length along the stall depth
+      c.position.set(cx, 0, zFront + 7.9 + (i % 2 ? 0.3 : -0.2));
+      c.rotation.y = alignFix + jitter + (i % 2 ? Math.PI : 0);
+      scene.add(c);
     }
-  }
-  // fleet-wide wheels/hubs/arches: 3 draws for every car on the lot
-  const wheelSets = [
-    [new THREE.CylinderGeometry(0.31, 0.31, 0.24, 16), new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false }), wheelXf],
-    [new THREE.CylinderGeometry(0.14, 0.14, 0.26, 12), new THREE.MeshStandardMaterial({ color: 0x8f969c, roughness: 0.3, metalness: 0.9, fog: false }), hubXf],
-    [new THREE.TorusGeometry(0.36, 0.055, 8, 16, Math.PI), new THREE.MeshStandardMaterial({ color: 0x0e1013, roughness: 0.9, fog: false }), archXf],
-  ];
-  for (const [geo, mat, xfs] of wheelSets) {
-    const im = new THREE.InstancedMesh(geo, mat, xfs.length);
-    xfs.forEach((m, i) => im.setMatrixAt(i, m));
-    im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
-    scene.add(im);
+  } else {
+    // fallback: procedural extruded cars + fleet-wide instanced wheels
+    const wheelXf = [], hubXf = [], archXf = [];
+    for (let i = 0; i < fleet.length; i++) {
+      const [cx, jitter, color, kind] = fleet[i];
+      const c = car(color, kind);
+      c.position.set(cx, 0, zFront + 7.9 + (i % 2 ? 0.3 : -0.2));
+      c.rotation.y = jitter + (i % 2 ? Math.PI : 0);
+      scene.add(c);
+      c.updateMatrixWorld(true);
+      for (const [dx, dz] of c.userData.wheelLocals) {
+        const lw = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lw.setPosition(dx, 0.31, dz);
+        wheelXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lw));
+        const lh = new THREE.Matrix4().makeRotationZ(Math.PI / 2); lh.setPosition(dx * 1.01, 0.31, dz);
+        hubXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, lh));
+        const la = new THREE.Matrix4().makeRotationY(Math.PI / 2); la.setPosition(dx * 1.06, 0.31, dz);
+        archXf.push(new THREE.Matrix4().multiplyMatrices(c.matrixWorld, la));
+      }
+    }
+    const wheelSets = [
+      [new THREE.CylinderGeometry(0.31, 0.31, 0.24, 16), new THREE.MeshStandardMaterial({ color: 0x0c0e11, roughness: 0.85, fog: false }), wheelXf],
+      [new THREE.CylinderGeometry(0.14, 0.14, 0.26, 12), new THREE.MeshStandardMaterial({ color: 0x8f969c, roughness: 0.3, metalness: 0.9, fog: false }), hubXf],
+      [new THREE.TorusGeometry(0.36, 0.055, 8, 16, Math.PI), new THREE.MeshStandardMaterial({ color: 0x0e1013, roughness: 0.9, fog: false }), archXf],
+    ];
+    for (const [geo, mat, xfs] of wheelSets) {
+      const im = new THREE.InstancedMesh(geo, mat, xfs.length);
+      xfs.forEach((m, i) => im.setMatrixAt(i, m));
+      im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+      scene.add(im);
+    }
   }
   // red bollards guarding the storefront
   for (const bx of [-4.6, -2.5, 2.5, 4.6]) {
@@ -1104,6 +1134,49 @@ function floorZones(scene) {
   zone(12, -8.5, 18, 10.4, 0x3c4048);   // electronics: cool dark carpet
 }
 
+// photoscanned props from the model kit (all optional — no kit, no props)
+function kitProps(scene, colliders) {
+  // wine nook: wooden display shelf + bottle collection on a plinth (back-left)
+  if (hasModel('prop_wineshelf')) {
+    const shelf = cloneModel('prop_wineshelf', { castShadow: true });
+    shelf.position.set(-21.9, 0, -11.2);
+    shelf.rotation.y = Math.PI / 2;
+    scene.add(shelf);
+    colliders.push({ minX: -22.6, maxX: -21.2, minZ: -12.1, maxZ: -10.3 });
+  }
+  if (hasModel('prop_wine')) {
+    const plinth = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.5, 0.6), PAINTED(0x22262b, 0.5));
+    plinth.position.set(-21.7, 0.25, -9.2); plinth.castShadow = true; scene.add(plinth);
+    const wine = cloneModelAtHeight('prop_wine', 0.36, { castShadow: true });
+    wine.position.set(-21.7, 0.5, -9.2);
+    scene.add(wine);
+    colliders.push({ minX: -22.2, maxX: -21.2, minZ: -9.55, maxZ: -8.85 });
+  }
+  // greenery at the entrance + pharmacy
+  if (hasModel('prop_plant')) {
+    for (const [px, pz] of [[-5.9, 13.6], [5.9, 13.6], [20.9, 13.0]]) {
+      const p = cloneModelAtHeight('prop_plant', 0.55, { castShadow: true });
+      p.position.set(px, 0, pz);
+      scene.add(p);
+    }
+  }
+  // restock clutter: cardboard boxes + produce crates
+  if (hasModel('prop_box')) {
+    for (const [bx, bz, r] of [[-20.6, -14.1, 0.4], [-19.9, -14.15, -0.2], [20.4, -13.6, 0.9]]) {
+      const b = cloneModelAtHeight('prop_box', 0.42, { castShadow: true });
+      b.position.set(bx, 0, bz); b.rotation.y = r;
+      scene.add(b);
+    }
+  }
+  if (hasModel('prop_crate')) {
+    const c1 = cloneModelAtHeight('prop_crate', 0.3, { castShadow: true });
+    c1.position.set(-21.6, 0, 8.2); scene.add(c1);
+    const c2 = cloneModelAtHeight('prop_crate', 0.3);
+    c2.position.set(-21.6, 0.3, 8.24); c2.rotation.y = 0.16; scene.add(c2);
+    colliders.push({ minX: -22.1, maxX: -21.1, minZ: 7.7, maxZ: 8.7 });
+  }
+}
+
 // yellow deal tags sprinkled along shelf rails
 function saleTags(scene, rng) {
   const texts = [saleTagTex('2 FOR', '$5.00'), saleTagTex('SAVE', '$1.00'), saleTagTex('NEW!', 'try me', '#c9241a', '#fff')];
@@ -1296,6 +1369,7 @@ export function buildStore(scene, loader) {
   apparel(scene, colliders, rng);
   toysDept(scene, slots, colliders, rng);
   pharmacy(scene, colliders);
+  kitProps(scene, colliders);
 
   // set dressing (endcaps + checkout racks add product slots — before buildStock)
   exterior(scene, loader);

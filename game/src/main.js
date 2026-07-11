@@ -7,6 +7,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 
 import { loadEnvironment } from './env.js';
+import { preloadModels } from './models.js';
 import { buildStore, STORE } from './store.js';
 import { createShoppers } from './characters.js';
 import { createGame } from './game.js';
@@ -56,6 +57,8 @@ try {
   bootmsg.textContent = 'Lighting…';
   loadEnvironment(renderer, scene, manager).catch((e) => (window.__err = 'env: ' + e));
 
+  bootmsg.textContent = 'Loading models…';
+  await preloadModels(manager); // real CC0 models (cars/produce/props); no-op without a kit
   bootmsg.textContent = 'Building store…';
   const world = buildStore(scene, texLoader);
   camera.position.copy(world.spawn);

@@ -1,0 +1,68 @@
+{
+  "car_sedan": {
+    "file": "car_sedan.glb"
+  },
+  "car_suv": {
+    "file": "car_suv.glb"
+  },
+  "car_suvlux": {
+    "file": "car_suvlux.glb"
+  },
+  "car_van": {
+    "file": "car_van.glb"
+  },
+  "car_hatch": {
+    "file": "car_hatch.glb"
+  },
+  "car_sedansport": {
+    "file": "car_sedansport.glb"
+  },
+  "car_delivery": {
+    "file": "car_delivery.glb"
+  },
+  "car_taxi": {
+    "file": "car_taxi.glb"
+  },
+  "prod_apple": {
+    "file": "prod_apple.glb"
+  },
+  "prod_lemon": {
+    "file": "prod_lemon.glb"
+  },
+  "prod_avocado": {
+    "file": "prod_avocado.glb"
+  },
+  "prod_banana": {
+    "file": "prod_banana.glb"
+  },
+  "prod_onion": {
+    "file": "prod_onion.glb"
+  },
+  "prod_sweetpotato": {
+    "file": "prod_sweetpotato.glb"
+  },
+  "prod_tins": {
+    "file": "prod_tins.glb"
+  },
+  "prod_croissant": {
+    "file": "prod_croissant.glb"
+  },
+  "prop_register": {
+    "file": "prop_register.glb"
+  },
+  "prop_plant": {
+    "file": "prop_plant.glb"
+  },
+  "prop_box": {
+    "file": "prop_box.glb"
+  },
+  "prop_crate": {
+    "file": "prop_crate.glb"
+  },
+  "prop_wineshelf": {
+    "file": "prop_wineshelf.glb"
+  },
+  "prop_wine": {
+    "file": "prop_wine.glb"
+  }
+}
