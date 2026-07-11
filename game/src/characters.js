@@ -341,7 +341,7 @@ export function createShoppers(scene, manager, world) {
       const spot = world.staffSpots[i];
       const src = cast[(i + 3) % cast.length];
       const p = spawnPerson(src);
-      const n = { ...p, oneClip: false, facing: src.facing, x: spot.x, z: spot.z, yaw: spot.yaw, speed: 0, path: [], pause: Infinity, browsing: true };
+      const n = { ...p, oneClip: false, facing: src.facing, x: spot.x, z: spot.z, yaw: spot.yaw, speed: 0, path: [], pause: Infinity, browsing: true, home: { x: spot.x, z: spot.z } };
       n.model.position.set(spot.x, 0, spot.z);
       n.model.rotation.y = spot.yaw + src.facing;
       scene.add(n.model);
@@ -362,6 +362,24 @@ export function createShoppers(scene, manager, world) {
   function update(dt) {
     for (const n of npcs) {
       n.mixer.update(dt);
+      // physics shove: stagger with the hit, wobble, then recover
+      if (n.shove) {
+        n.x += n.shove.vx * dt; n.z += n.shove.vz * dt;
+        const decay = Math.min(1, 4.5 * dt);
+        n.shove.vx -= n.shove.vx * decay; n.shove.vz -= n.shove.vz * decay;
+        n.shove.t -= dt;
+        n.yaw += (Math.random() - 0.5) * 1.2 * dt;
+        n.model.position.set(n.x, 0, n.z);
+        n.model.rotation.y = n.yaw + n.facing;
+        if (n.shove.t <= 0) n.shove = null;
+      } else if (n.home) {
+        // staff drift back to their post after being bumped
+        const hx = n.home.x - n.x, hz = n.home.z - n.z;
+        if (Math.hypot(hx, hz) > 0.05) {
+          n.x += hx * Math.min(1, 2 * dt); n.z += hz * Math.min(1, 2 * dt);
+          n.model.position.set(n.x, 0, n.z);
+        }
+      }
       if (n.browsing) continue;
       if (n.pause > 0) {
         n.pause -= dt;

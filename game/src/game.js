@@ -16,8 +16,13 @@ export function createGame(scene, camera, world) {
   const ray = new THREE.Raycaster();
   ray.far = REACH;
   const flyers = [];
+  // scratch objects — the hover path runs every frame
+  const _ndc = new THREE.Vector2(0, 0);
+  const _flyTarget = new THREE.Vector3();
+  const _flyDir = new THREE.Vector3();
+  const _nearDebris = [];
   let hover = null, listDone = false, done = false, started = false, time = 0;
-  let list = [];
+  let list = [], lastSec = -1;
 
   // hover glow: one shared translucent box, fitted to the aimed product
   const glow = new THREE.Mesh(
@@ -62,12 +67,20 @@ export function createGame(scene, camera, world) {
   function tryGrab() {
     if (!hover || done) return;
     const h = hover; setHover(null);
-    h.hide();
-    // spawn a real mesh where the instance was; it flies into the basket
-    const fly = buildProduct(h.spec);
-    fly.position.set(h.x, h.y, h.z);
-    fly.rotation.y = h.rotY;
-    scene.add(fly);
+    let fly;
+    if (h.debris) {
+      // pick the knocked-down item up off the floor — reuse its mesh
+      world.physics.removeDebris(h.debris);
+      fly = h.debris;
+      fly.rotation.x = 0; fly.rotation.z = 0;
+      scene.add(fly);
+    } else {
+      h.hide();
+      fly = buildProduct(h.spec);
+      fly.position.set(h.x, h.y, h.z);
+      fly.rotation.y = h.rotY;
+      scene.add(fly);
+    }
     flyers.push({ g: fly, t: 0, from: new THREE.Vector3(h.x, h.y, h.z) });
     SFX.grab();
     const entry = list.find((e) => e.id === h.spec.id && e.got < e.need);
@@ -94,10 +107,10 @@ export function createGame(scene, camera, world) {
     for (let i = flyers.length - 1; i >= 0; i--) {
       const f = flyers[i];
       f.t = Math.min(1, f.t + dt / 0.4);
-      const target = camera.position.clone()
-        .add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(0.45))
-        .add(new THREE.Vector3(0, -0.32, 0));
-      f.g.position.lerpVectors(f.from, target, f.t);
+      camera.getWorldDirection(_flyDir);
+      _flyTarget.copy(camera.position).addScaledVector(_flyDir, 0.45);
+      _flyTarget.y -= 0.32;
+      f.g.position.lerpVectors(f.from, _flyTarget, f.t);
       f.g.position.y += Math.sin(f.t * Math.PI) * 0.3;
       f.g.rotation.y += dt * 7;
       f.g.scale.setScalar(1 - 0.75 * f.t);
@@ -106,11 +119,33 @@ export function createGame(scene, camera, world) {
     if (!locked) { setHover(null); promptEl.style.display = 'none'; return; }
     if (!started) started = true;
     if (started && !done) time += dt;
-    timerEl.textContent = fmt(time);
+    const secs = Math.floor(time);
+    if (secs !== lastSec) { lastSec = secs; timerEl.textContent = fmt(time); }
 
-    ray.setFromCamera(new THREE.Vector2(0, 0), camera);
+    ray.setFromCamera(_ndc, camera);
     const hits = ray.intersectObjects(world.stock.raycastTargets, false);
-    setHover(hits.length ? world.stock.resolve(hits[0]) : null);
+    let target = hits.length ? world.stock.resolve(hits[0]) : null;
+    // knocked-off items on the floor are still fair game for your list —
+    // but only raycast the pieces actually near the player
+    if (world.physics && world.physics.debrisMeshes.length) {
+      _nearDebris.length = 0;
+      for (const m of world.physics.debrisMeshes) {
+        const ddx = m.position.x - camera.position.x, ddz = m.position.z - camera.position.z;
+        if (ddx * ddx + ddz * ddz < 20) _nearDebris.push(m);
+      }
+      const dHits = _nearDebris.length ? ray.intersectObjects(_nearDebris, true) : [];
+      if (dHits.length && (!hits.length || dHits[0].distance < hits[0].distance)) {
+        let m = dHits[0].object;
+        while (m && !m.userData.debris) m = m.parent;
+        if (m) {
+          target = {
+            debris: m, spec: m.userData.spec, size: m.userData.size, centerY: m.userData.centerY,
+            x: m.position.x, y: m.position.y, z: m.position.z, rotY: m.rotation.y,
+          };
+        }
+      }
+    }
+    setHover(target);
 
     const nearCheckout = camera.position.distanceTo(world.checkout) < 2.2;
     if (done) {
@@ -133,7 +168,11 @@ export function createGame(scene, camera, world) {
     world.checkoutRing.visible = false;
     SFX.checkout();
     const total = list.reduce((a, e) => a + e.price, 0);
-    banner(`<h2>🛒 Checked out!</h2><p>${list.length} items · $${total.toFixed(2)}</p><p class="big">${fmt(time)}</p><p class="dim">Press R for a new list</p>`);
+    const dmg = world.physics ? world.physics.damage : { total: 0, count: 0 };
+    const dmgLine = dmg.count > 0
+      ? `<p style="color:#e8907f">Store damages: ${dmg.count} items · $${dmg.total.toFixed(2)} 😬</p>`
+      : '';
+    banner(`<h2>🛒 Checked out!</h2><p>${list.length} items · $${total.toFixed(2)}</p>${dmgLine}<p class="big">${fmt(time)}</p><p class="dim">Press R for a new list</p>`);
   }
   const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
 

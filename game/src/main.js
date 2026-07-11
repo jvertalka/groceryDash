@@ -10,6 +10,7 @@ import { loadEnvironment } from './env.js';
 import { buildStore, STORE } from './store.js';
 import { createShoppers } from './characters.js';
 import { createGame } from './game.js';
+import { createPhysics } from './physics.js';
 import { SFX } from './sfx.js';
 
 const boot = document.getElementById('boot');
@@ -62,6 +63,9 @@ try {
 
   const shoppers = createShoppers(scene, manager, world);
   const game = createGame(scene, camera, world);
+  world.getNpcs = () => shoppers.npcs;
+  const physics = createPhysics({ scene, world, camera });
+  world.physics = physics;
 
   // ---------------------------------------------------------------- post
   const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 2, type: THREE.HalfFloatType });
@@ -121,28 +125,39 @@ try {
   addEventListener('keydown', (e) => (keys[e.code] = true));
   addEventListener('keyup', (e) => (keys[e.code] = false));
 
-  const R = 0.34, SPEED = 3.1;
-  const hits = (x, z) => world.colliders.some((c) => x > c.minX - R && x < c.maxX + R && z > c.minZ - R && z < c.maxZ + R);
+  const R = 0.34, SPEED_WALK = 3.1, SPEED_RUN = 4.9;
+  const hitC = (x, z) => world.colliders.find((c) => x > c.minX - R && x < c.maxX + R && z > c.minZ - R && z < c.maxZ + R);
   let bob = 0;
+  const playerVel = new THREE.Vector3();
+  const _dir = new THREE.Vector3(), _right = new THREE.Vector3();
   function move(dt) {
     const f = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0);
     const s = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
     const moving = (f || s) && playing;
+    const SPEED = (keys.ShiftLeft || keys.ShiftRight) ? SPEED_RUN : SPEED_WALK;
     if (moving) {
-      const dir = new THREE.Vector3();
-      camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
-      const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
-      const vx = dir.x * f + right.x * s, vz = dir.z * f + right.z * s;
+      camera.getWorldDirection(_dir); _dir.y = 0; _dir.normalize();
+      _right.crossVectors(_dir, camera.up).normalize();
+      const vx = _dir.x * f + _right.x * s, vz = _dir.z * f + _right.z * s;
       const len = Math.hypot(vx, vz) || 1;
+      const dx = vx / len, dz = vz / len;
+      playerVel.set(dx * SPEED, 0, dz * SPEED);
       const p = camera.position;
-      const nx = p.x + (vx / len) * SPEED * dt, nz = p.z + (vz / len) * SPEED * dt;
+      const nx = p.x + dx * SPEED * dt, nz = p.z + dz * SPEED * dt;
       const b = world.bounds;
-      const stuck = hits(p.x, p.z); // if ever wedged inside a collider, let them walk out
-      if (nx > b.minX && nx < b.maxX && (stuck || !hits(nx, p.z))) p.x = nx;
-      if (nz > b.minZ && nz < b.maxZ && (stuck || !hits(p.x, nz))) p.z = nz;
-      bob += dt * 10.5;
+      const stuck = !!hitC(p.x, p.z); // if ever wedged inside a collider, let them walk out
+      const cX = hitC(nx, p.z);
+      if (nx > b.minX && nx < b.maxX && (stuck || !cX)) p.x = nx;
+      else if (cX) physics.onPlayerBlocked(cX, SPEED, dx, dz);
+      const cZ = hitC(p.x, nz);
+      if (nz > b.minZ && nz < b.maxZ && (stuck || !cZ)) p.z = nz;
+      else if (cZ) physics.onPlayerBlocked(cZ, SPEED, dx, dz);
+      bob += dt * (SPEED > 4 ? 13.5 : 10.5);
+    } else {
+      playerVel.multiplyScalar(Math.max(0, 1 - 6 * dt));
     }
-    camera.position.y = 1.65 + (moving ? Math.sin(bob) * 0.03 : 0);
+    camera.position.y = 1.65 + (moving ? Math.sin(bob) * (SPEED > 4 ? 0.045 : 0.03) : 0)
+      + (physics.shake > 0 ? (Math.random() - 0.5) * physics.shake * 0.12 : 0);
   }
 
   // ---------------------------------------------------------------- loop
@@ -189,6 +204,7 @@ try {
     const dt = Math.min(clock.getDelta(), 0.05);
     autoQuality(dt);
     move(dt);
+    physics.update(dt, camera.position, playerVel);
     world.update(dt, camera);
     shoppers.update(dt);
     game.update(dt, playing);
@@ -209,6 +225,7 @@ try {
     __controls: controls, __world: world, __STORE: STORE, __game: game,
     __stock: world.stock, __npcs: shoppers.npcs, __npcUpdate: shoppers.update, __ready: true,
     __move: move, __setPlaying: (v) => (playing = v), __isPlaying: () => playing, __isFallback: () => fallbackLook,
+    __physics: physics, __keys: keys, __playerVel: playerVel,
   });
 } catch (e) {
   window.__err = (e && e.stack) || String(e);

@@ -387,18 +387,21 @@ function cartsAndBaskets(scene) {
     const r = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.6, 8), rail);
     r.rotation.z = Math.PI / 2; r.position.set(-2.4, 0.55, 13.9 + dz); scene.add(r);
   }
+  // carts are DYNAMIC (physics layer) — only the corral rails collide, thin,
+  // so shoved carts can escape out the open ends
   const c1 = shoppingCart(); c1.position.set(-2.9, 0, 13.9); c1.rotation.y = Math.PI / 2; scene.add(c1);
   const c2 = shoppingCart(); c2.position.set(-1.9, 0, 13.9); c2.rotation.y = Math.PI / 2; scene.add(c2);
   const c3 = shoppingCart(); c3.position.set(-1.2, 0, -3.2); c3.rotation.y = 2.3; scene.add(c3);
-  colliders.push({ minX: -3.6, maxX: -1.3, minZ: 13.3, maxZ: 14.5 });
-  colliders.push({ minX: -1.7, maxX: -0.7, minZ: -3.7, maxZ: -2.7 });
+  const carts = [c1, c2, c3];
+  colliders.push({ minX: -3.7, maxX: -1.1, minZ: 13.28, maxZ: 13.42 });
+  colliders.push({ minX: -3.7, maxX: -1.1, minZ: 14.38, maxZ: 14.52 });
   for (let i = 0; i < 5; i++) {
     const b = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.22, 0.3), PLASTIC(0xc9241a, 0.45));
     b.position.set(1.5 + (i % 2) * 0.02, 0.11 + i * 0.09, 14.2);
     b.rotation.y = (i % 2) * 0.08; b.castShadow = true; scene.add(b);
   }
   colliders.push({ minX: 1.2, maxX: 1.8, minZ: 13.9, maxZ: 14.5 });
-  return colliders;
+  return { colliders, carts };
 }
 
 // ------------------------------------------------------------- entrance
@@ -1231,13 +1234,16 @@ export function buildStore(scene, loader) {
     [['dairy', 'dairy', 'dairy', 'dairy'], ['pantry', 'pantry', 'snacks', 'pantry']],
     [['household', 'household', 'household', 'household'], ['dairy', 'dairy', 'dairy', 'dairy']],
   ];
+  const physGondolas = []; // tippable islands for the physics layer
   const groceryXs = [-18, -14, -10, -6];
   groceryXs.forEach((x, i) => {
     const local = [], localTags = [];
     const gd = gondola(local, localTags, islandLen, faces[i], rng);
     gd.position.set(x, 0, islandZ); scene.add(gd);
     emitSlots(gd, local, slots); emitSlots(gd, localTags, tagSlots);
-    colliders.push({ minX: x - 0.52, maxX: x + 0.52, minZ: islandZ - islandLen / 2 - 0.1, maxZ: islandZ + islandLen / 2 + 0.1 });
+    const col = { minX: x - 0.52, maxX: x + 0.52, minZ: islandZ - islandLen / 2 - 0.1, maxZ: islandZ + islandLen / 2 + 0.1 };
+    colliders.push(col);
+    physGondolas.push({ group: gd, collider: col, axis: 'z', cx: x, cz: islandZ, len: islandLen, label: String(i + 1) });
   });
   const signs = [['1', 'Frozen · Breakfast', 'Cereal'], ['2', 'Snacks · Candy', 'Soda · Water'], ['3', 'Pasta · Sauce', 'Canned Goods'], ['4', 'Dairy · Eggs', 'Household'], ['5', 'Household', 'Paper Goods']];
   [-20, -16, -12, -8, -4].forEach((x, i) => hangingSign(scene, aisleSignTex(...signs[i]), 1.7, x, 3.0, -3));
@@ -1256,7 +1262,8 @@ export function buildStore(scene, loader) {
   colliders.push(...produceCorner(scene, slots, woodMat, rng));
   const co = checkoutLanes(scene);
   colliders.push(...co.colliders);
-  colliders.push(...cartsAndBaskets(scene));
+  const cb = cartsAndBaskets(scene);
+  colliders.push(...cb.colliders);
   const doors = entrance(scene);
 
   // GENERAL MERCHANDISE half (east): electronics, apparel, toys, pharmacy
@@ -1267,20 +1274,24 @@ export function buildStore(scene, loader) {
     { x: 10, z: -7.5, sections: [['electronics', 'electronics', 'home', 'electronics'], ['home', 'home', 'electronics', 'home']] },
     { x: 10, z: -3.5, sections: [['home', 'toys', 'home', 'toys'], ['toys', 'toys', 'home', 'toys']] },
   ];
-  for (const mi of merchIslands) {
+  merchIslands.forEach((mi, i) => {
     const local = [], localTags = [];
     const gd = gondola(local, localTags, 12, mi.sections, rng);
     gd.position.set(mi.x, 0, mi.z); gd.rotation.y = Math.PI / 2; scene.add(gd);
     emitSlots(gd, local, slots); emitSlots(gd, localTags, tagSlots);
-    colliders.push({ minX: mi.x - 6.1, maxX: mi.x + 6.1, minZ: mi.z - 0.52, maxZ: mi.z + 0.52 });
-  }
+    const col = { minX: mi.x - 6.1, maxX: mi.x + 6.1, minZ: mi.z - 0.52, maxZ: mi.z + 0.52 };
+    colliders.push(col);
+    physGondolas.push({ group: gd, collider: col, axis: 'x', cx: mi.x, cz: mi.z, len: 12, label: String(6 + i) });
+  });
   // toys tall island along the right edge
   {
     const local = [], localTags = [];
     const gd = gondola(local, localTags, 10, [['toys', 'toys', 'toys', 'toys'], ['pharmacy', 'home', 'pharmacy', 'home']], rng);
     gd.position.set(19.5, 0, -2); scene.add(gd);
     emitSlots(gd, local, slots); emitSlots(gd, localTags, tagSlots);
-    colliders.push({ minX: 19.5 - 0.52, maxX: 19.5 + 0.52, minZ: -2 - 5.1, maxZ: -2 + 5.1 });
+    const col = { minX: 19.5 - 0.52, maxX: 19.5 + 0.52, minZ: -2 - 5.1, maxZ: -2 + 5.1 };
+    colliders.push(col);
+    physGondolas.push({ group: gd, collider: col, axis: 'z', cx: 19.5, cz: -2, len: 10, label: '8' });
   }
   apparel(scene, colliders, rng);
   toysDept(scene, slots, colliders, rng);
@@ -1324,6 +1335,7 @@ export function buildStore(scene, loader) {
 
   return {
     colliders, bounds, stock, corridors, staffSpots,
+    physicsMeta: { gondolas: physGondolas, carts: cb.carts },
     checkout: co.point, checkoutRing: ring,
     spawn: new THREE.Vector3(0.6, 1.65, 13.2),
 

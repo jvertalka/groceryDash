@@ -196,46 +196,54 @@ function bagGeometry(w, h, d) {
 // ============================================================ MESH FACTORIES
 // Products do NOT cast shadows (GTAO grounds them) — keeps the shadow pass
 // cheap enough for thousands of facings under multiple shadow-casting lights.
+// Materials are CACHED per (spec, role): products are built repeatedly at
+// runtime (debris, flyers), and fresh MeshStandardMaterials per build meant
+// unbounded shader/material churn. Cached materials are never mutated.
+const _matCache = new Map();
+const cmat = (key, make) => {
+  if (!_matCache.has(key)) _matCache.set(key, make());
+  return _matCache.get(key);
+};
 const mat = (o) => new THREE.MeshStandardMaterial(o);
-const sideMat = (spec) => mat({ color: new THREE.Color(spec.bg2), roughness: 0.85 });
+const sideMat = (spec) => cmat(spec.id + ':side', () => mat({ color: new THREE.Color(spec.bg2), roughness: 0.85 }));
 
 function boxProduct(spec, w, h, d) {
-  const face = mat({ map: labelTexture(spec), roughness: 0.82 });
+  const face = cmat(spec.id + ':face', () => mat({ map: labelTexture(spec), roughness: 0.82 }));
   const side = sideMat(spec);
   return new THREE.Mesh(geo(`box${w}x${h}x${d}`, () => new THREE.BoxGeometry(w, h, d)), [side, side, side, side, face, face]);
 }
 function canProduct(spec, r, h) {
-  const label = mat({ map: labelTexture(spec, true), roughness: 0.35, metalness: 0.5 });
-  const metal = mat({ color: 0xd7dde3, roughness: 0.3, metalness: 0.95 });
+  const label = cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.35, metalness: 0.5 }));
+  const metal = cmat('_canmetal', () => mat({ color: 0xd7dde3, roughness: 0.3, metalness: 0.95 }));
   return new THREE.Mesh(geo(`can${r}x${h}`, () => new THREE.CylinderGeometry(r, r, h, 20, 1)), [label, metal, metal]);
 }
 function jarProduct(spec, r, h) {
   const g = new THREE.Group();
-  const label = mat({ map: labelTexture(spec, true), roughness: 0.25, envMapIntensity: 1.4 });
+  const label = cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.25, envMapIntensity: 1.4 }));
   const body = new THREE.Mesh(geo(`jar${r}x${h}`, () => new THREE.CylinderGeometry(r, r * 0.96, h, 20, 1)), label);
   body.position.y = h / 2; g.add(body);
-  const lid = new THREE.Mesh(geo(`jarlid${r}`, () => new THREE.CylinderGeometry(r * 0.82, r * 0.82, h * 0.16, 20)), mat({ color: 0xcfa348, metalness: 0.85, roughness: 0.35 }));
+  const lid = new THREE.Mesh(geo(`jarlid${r}`, () => new THREE.CylinderGeometry(r * 0.82, r * 0.82, h * 0.16, 20)), cmat('_jarlid', () => mat({ color: 0xcfa348, metalness: 0.85, roughness: 0.35 })));
   lid.position.y = h + h * 0.08; g.add(lid);
   return g;
 }
 function bottleProduct(spec, r, h) {
   const g = new THREE.Group();
-  const label = mat({ map: labelTexture(spec, true), roughness: 0.2, envMapIntensity: 1.5 });
+  const label = cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.2, envMapIntensity: 1.5 }));
   const body = new THREE.Mesh(geo(`bot${r}x${h}`, () => new THREE.CylinderGeometry(r, r, h * 0.62, 18)), label);
   body.position.y = h * 0.31; g.add(body);
-  const shoulder = new THREE.Mesh(geo(`botsh${r}`, () => new THREE.CylinderGeometry(r * 0.4, r, h * 0.2, 18)), mat({ color: new THREE.Color(spec.bg1), roughness: 0.15, envMapIntensity: 1.5 }));
+  const shoulder = new THREE.Mesh(geo(`botsh${r}`, () => new THREE.CylinderGeometry(r * 0.4, r, h * 0.2, 18)), cmat(spec.id + ':shoulder', () => mat({ color: new THREE.Color(spec.bg1), roughness: 0.15, envMapIntensity: 1.5 })));
   shoulder.position.y = h * 0.72; g.add(shoulder);
-  const cap = new THREE.Mesh(geo(`botcap${r}`, () => new THREE.CylinderGeometry(r * 0.34, r * 0.34, h * 0.14, 14)), mat({ color: new THREE.Color(spec.accent), roughness: 0.4 }));
+  const cap = new THREE.Mesh(geo(`botcap${r}`, () => new THREE.CylinderGeometry(r * 0.34, r * 0.34, h * 0.14, 14)), cmat(spec.id + ':cap', () => mat({ color: new THREE.Color(spec.accent), roughness: 0.4 })));
   cap.position.y = h * 0.89; g.add(cap);
   return g;
 }
 function bagProduct(spec, w, h, d) {
-  const front = mat({ map: labelTexture(spec), roughness: 0.22, metalness: 0.15, envMapIntensity: 1.35 });
-  const back = mat({ color: new THREE.Color(spec.bg2), roughness: 0.22, metalness: 0.15 });
+  const front = cmat(spec.id + ':face', () => mat({ map: labelTexture(spec), roughness: 0.22, metalness: 0.15, envMapIntensity: 1.35 }));
+  const back = cmat(spec.id + ':bagback', () => mat({ color: new THREE.Color(spec.bg2), roughness: 0.22, metalness: 0.15 }));
   return new THREE.Mesh(bagGeometry(w, h, d), [back, back, back, back, front, back]);
 }
 function cartonProduct(spec, w, h, d) {
-  const face = mat({ map: labelTexture(spec), roughness: 0.5 });
+  const face = cmat(spec.id + ':cartonface', () => mat({ map: labelTexture(spec), roughness: 0.5 }));
   const side = sideMat(spec);
   const g = new THREE.Group();
   const body = new THREE.Mesh(geo(`cart${w}x${h}`, () => new THREE.BoxGeometry(w, h * 0.78, d)), [side, side, side, side, face, face]);
@@ -246,17 +254,17 @@ function cartonProduct(spec, w, h, d) {
 }
 function cupProduct(spec, r, h) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(geo(`cup${r}x${h}`, () => new THREE.CylinderGeometry(r * 0.82, r, h, 18)), mat({ map: labelTexture(spec, true), roughness: 0.4 }));
+  const body = new THREE.Mesh(geo(`cup${r}x${h}`, () => new THREE.CylinderGeometry(r * 0.82, r, h, 18)), cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.4 })));
   body.position.y = h / 2; g.add(body);
-  const foil = new THREE.Mesh(geo(`cupfoil${r}`, () => new THREE.CylinderGeometry(r * 0.84, r * 0.84, 0.006, 18)), mat({ color: 0xd9dee4, metalness: 0.9, roughness: 0.25 }));
+  const foil = new THREE.Mesh(geo(`cupfoil${r}`, () => new THREE.CylinderGeometry(r * 0.84, r * 0.84, 0.006, 18)), cmat('_cupfoil', () => mat({ color: 0xd9dee4, metalness: 0.9, roughness: 0.25 })));
   foil.position.y = h + 0.003; g.add(foil);
   return g;
 }
 function tubProduct(spec, r, h) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(geo(`tub${r}x${h}`, () => new THREE.CylinderGeometry(r, r * 0.88, h, 20)), mat({ map: labelTexture(spec, true), roughness: 0.45 }));
+  const body = new THREE.Mesh(geo(`tub${r}x${h}`, () => new THREE.CylinderGeometry(r, r * 0.88, h, 20)), cmat(spec.id + ':label', () => mat({ map: labelTexture(spec, true), roughness: 0.45 })));
   body.position.y = h / 2; g.add(body);
-  const lid = new THREE.Mesh(geo(`tublid${r}`, () => new THREE.CylinderGeometry(r * 1.04, r * 1.04, h * 0.14, 20)), mat({ color: new THREE.Color(spec.accent), roughness: 0.5 }));
+  const lid = new THREE.Mesh(geo(`tublid${r}`, () => new THREE.CylinderGeometry(r * 1.04, r * 1.04, h * 0.14, 20)), cmat(spec.id + ':lid', () => mat({ color: new THREE.Color(spec.accent), roughness: 0.5 })));
   lid.position.y = h + h * 0.07; g.add(lid);
   return g;
 }
@@ -264,17 +272,17 @@ function tubProduct(spec, r, h) {
 function fruit(spec) {
   const g = new THREE.Group();
   if (spec.id === 'banana') {
-    const m = new THREE.Mesh(geo('banana', () => new THREE.TorusGeometry(0.075, 0.02, 8, 14, Math.PI * 0.9)), mat({ color: 0xf2c81b, roughness: 0.55 }));
+    const m = new THREE.Mesh(geo('banana', () => new THREE.TorusGeometry(0.075, 0.02, 8, 14, Math.PI * 0.9)), cmat('_banana', () => mat({ color: 0xf2c81b, roughness: 0.55 })));
     m.rotation.z = Math.PI * 0.55; m.position.y = 0.045; g.add(m);
   } else if (spec.id === 'lettuce') {
-    const m = new THREE.Mesh(geo('lettuce', () => new THREE.SphereGeometry(0.075, 14, 10)), mat({ color: 0x69b04b, roughness: 0.9 }));
+    const m = new THREE.Mesh(geo('lettuce', () => new THREE.SphereGeometry(0.075, 14, 10)), cmat('_lettuce', () => mat({ color: 0x69b04b, roughness: 0.9 })));
     m.scale.y = 0.85; m.position.y = 0.064; g.add(m);
   } else {
     const col = spec.id === 'apple' ? 0xc62d1f : 0xf28c1b;
-    const m = new THREE.Mesh(geo('fruit', () => new THREE.SphereGeometry(0.052, 14, 10)), mat({ color: col, roughness: 0.45, envMapIntensity: 1.2 }));
+    const m = new THREE.Mesh(geo('fruit', () => new THREE.SphereGeometry(0.052, 14, 10)), cmat(spec.id + ':fruit', () => mat({ color: col, roughness: 0.45, envMapIntensity: 1.2 })));
     m.scale.y = 0.94; m.position.y = 0.049; g.add(m);
     if (spec.id === 'apple') {
-      const stem = new THREE.Mesh(geo('stem', () => new THREE.CylinderGeometry(0.004, 0.006, 0.03, 6)), mat({ color: 0x5c3a1a, roughness: 0.9 }));
+      const stem = new THREE.Mesh(geo('stem', () => new THREE.CylinderGeometry(0.004, 0.006, 0.03, 6)), cmat('_stem', () => mat({ color: 0x5c3a1a, roughness: 0.9 })));
       stem.position.y = 0.1; g.add(stem);
     }
   }
@@ -297,7 +305,7 @@ export function buildProduct(spec) {
     case 'boxtall': obj = boxProduct(spec, 0.17, 0.3, 0.09); obj.position.y = 0.15; break;
     case 'boxbig': obj = boxProduct(spec, 0.62, 0.42, 0.14); obj.position.y = 0.21; break;
     case 'ball': {
-      obj = new THREE.Mesh(geo('playball', () => new THREE.SphereGeometry(0.115, 16, 12)), mat({ color: new THREE.Color(spec.bg1), roughness: 0.35, envMapIntensity: 1.3 }));
+      obj = new THREE.Mesh(geo('playball', () => new THREE.SphereGeometry(0.115, 16, 12)), cmat(spec.id + ':ball', () => mat({ color: new THREE.Color(spec.bg1), roughness: 0.35, envMapIntensity: 1.3 })));
       obj.position.y = 0.115;
       break;
     }

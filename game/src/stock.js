@@ -72,6 +72,22 @@ export function buildStock(scene, slots) {
       const h = handles.get(id)[hit.instanceId];
       return h && !h.hidden ? h : null;
     },
+    // hide (and return) visible handles inside a world-space box — used by the
+    // physics layer to knock items off shelves / spill a tipped gondola
+    hideInRegion(box, limit = Infinity) {
+      const out = [];
+      const minY = box.minY !== undefined ? box.minY : -1, maxY = box.maxY !== undefined ? box.maxY : 99;
+      for (const [, hs] of handles) {
+        for (const h of hs) {
+          if (h.hidden) continue;
+          if (h.x >= box.minX && h.x <= box.maxX && h.z >= box.minZ && h.z <= box.maxZ && h.y >= minY && h.y <= maxY) {
+            h.hide(); out.push(h);
+            if (out.length >= limit) return out;
+          }
+        }
+      }
+      return out;
+    },
     // distinct specs that still have visible, grabbable stock
     availableSpecs() {
       const out = [];

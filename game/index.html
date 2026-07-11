@@ -38,13 +38,14 @@
     #banner h2 { font-size: 22px; margin-bottom: 6px; }
     #banner .big { font-size: 34px; font-weight: 800; margin: 8px 0; }
     #banner .dim { opacity: .55; font-size: 13px; }
+    #toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); z-index: 13; font-size: 14.5px; font-weight: 600; background: rgba(10,14,18,.85); border: 1px solid rgba(255,255,255,.16); border-radius: 10px; padding: 8px 16px; opacity: 0; transition: opacity .25s; pointer-events: none; }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <div id="vignette"></div>
   <div id="crosshair"></div>
-  <div id="hint">Click to play · WASD move · E take item · M mute · Esc release</div>
+  <div id="hint">Click to play · WASD move · Shift sprint · E take item · M mute</div>
   <div id="list"></div>
   <div id="timer">0:00</div>
   <div id="prompt"></div>
