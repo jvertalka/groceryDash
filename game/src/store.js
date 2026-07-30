@@ -192,6 +192,7 @@ function freezerWall(scene, slots, rng) {
     { geo: new THREE.CylinderGeometry(0.016, 0.016, 0.5, 8), mat: METAL(0xd7dde3, 0.25), per: [[-0.09, H / 2, W / 2 - 0.14, 0]] },
   ];
   const mUnit = new THREE.Matrix4(), mLocal = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), one = new THREE.Vector3(1, 1, 1);
+  let glassIM = null;
   for (const part of parts) {
     const im = new THREE.InstancedMesh(part.geo, part.mat, doors * part.per.length);
     let ii = 0;
@@ -206,7 +207,18 @@ function freezerWall(scene, slots, rng) {
       }
     }
     im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere();
+    if (part.mat === glassMat) glassIM = im;
     g.add(im);
+  }
+  // per-door breakable glass registry for the physics layer
+  const glassDoors = [];
+  for (let i = 0; i < doors; i++) {
+    const z = -((doors - 1) * pitch) / 2 + i * pitch;
+    glassDoors.push({
+      index: i, broken: false, x: unitX + 0.05, z, y: H / 2, w: W - 0.14, h: H - 0.18,
+      // interior region for spilling the frozen stock when broken
+      spill: { minX: unitX - D, maxX: unitX, minZ: z - pitch / 2, maxZ: z + pitch / 2 },
+    });
   }
   // frozen stock slots (world coords, unchanged)
   for (let i = 0; i < doors; i++) {
@@ -221,7 +233,10 @@ function freezerWall(scene, slots, rng) {
   g.add(band);
   scene.add(g);
   hangingSign(scene, bannerTex('FROZEN', '#1f5f8a'), 3.2, -(STORE.w / 2 - 1.6), 2.95, 0, Math.PI / 2);
-  return { minX: -STORE.w / 2, maxX: -(STORE.w / 2 - D - 0.15), minZ: -(doors * pitch) / 2 - 0.1, maxZ: (doors * pitch) / 2 + 0.1 };
+  return {
+    collider: { minX: -STORE.w / 2, maxX: -(STORE.w / 2 - D - 0.15), minZ: -(doors * pitch) / 2 - 0.1, maxZ: (doors * pitch) / 2 + 0.1 },
+    glass: { im: glassIM, doors: glassDoors },
+  };
 }
 
 // ------------------------------------------------------------- produce corner
@@ -978,14 +993,18 @@ function tvWall(scene, slots, colliders, rng) {
     canvasTex(384, 216, (x) => { const g = x.createLinearGradient(0, 216, 384, 0); g.addColorStop(0, '#6a1b4d'); g.addColorStop(0.6, '#e55039'); g.addColorStop(1, '#fad390'); x.fillStyle = g; x.fillRect(0, 0, 384, 216); x.fillStyle = 'rgba(0,0,0,.35)'; for (let i = 0; i < 5; i++) x.fillRect(30 + i * 70, 140, 40, 60); }),
     canvasTex(384, 216, (x) => { x.fillStyle = '#091220'; x.fillRect(0, 0, 384, 216); x.fillStyle = '#48e07a'; x.font = '700 44px Arial'; x.textAlign = 'center'; x.fillText('4K ULTRA', 192, 96); x.fillStyle = '#bcd6ff'; x.font = '500 26px Arial'; x.fillText('VIXEL VISION', 192, 150); }),
   ];
+  const tvRegistry = [];
   for (let i = 0; i < 8; i++) {
     const tv = new THREE.Group();
     const bezel = new THREE.Mesh(new THREE.BoxGeometry(1.24, 0.72, 0.05), PLASTIC(0x0a0c10, 0.3));
     tv.add(bezel);
-    const scr = new THREE.Mesh(new THREE.PlaneGeometry(1.16, 0.64), new THREE.MeshStandardMaterial({ map: screens[i % 3], emissive: 0xffffff, emissiveMap: screens[i % 3], emissiveIntensity: 0.9, roughness: 0.4 }));
+    // per-TV material clone so a single screen can crack independently
+    const scrMat = new THREE.MeshStandardMaterial({ map: screens[i % 3], emissive: 0xffffff, emissiveMap: screens[i % 3], emissiveIntensity: 0.9, roughness: 0.4 });
+    const scr = new THREE.Mesh(new THREE.PlaneGeometry(1.16, 0.64), scrMat);
     scr.position.z = 0.03; tv.add(scr);
     tv.position.set(4.9 + i * 2.05, 1.95, z + 0.12);
     scene.add(tv);
+    tvRegistry.push({ mesh: scr, mat: scrMat, x: 4.9 + i * 2.05, y: 1.95, z: z + 0.12, broken: false, price: 379 });
   }
   // boxed TVs + gear on a low platform beneath
   const plat = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.32, 1.0), PAINTED(0x2b3038, 0.6));
@@ -997,6 +1016,7 @@ function tvWall(scene, slots, colliders, rng) {
   }
   colliders.push({ minX: 3.4, maxX: 20.6, minZ: -STORE.d / 2, maxZ: z + 1.35 });
   hangingSign(scene, bannerTex('ELECTRONICS', '#173a63'), 4.2, 12, 3.1, -11.6);
+  return tvRegistry;
 }
 
 // apparel: circular racks of hanging shirts + tables of folded stacks
@@ -1330,7 +1350,8 @@ export function buildStore(scene, loader) {
     colliders.push({ minX: -21.2, maxX: -4.8, minZ: -d / 2, maxZ: -d / 2 + 0.6 });
   }
 
-  colliders.push(freezerWall(scene, slots, rng)); // left wall
+  const freezer = freezerWall(scene, slots, rng); // left wall
+  colliders.push(freezer.collider);
   const woodMat = loadPBR(loader, 'wood', [2, 1.4]);
   colliders.push(...produceCorner(scene, slots, woodMat, rng));
   const co = checkoutLanes(scene);
@@ -1341,7 +1362,7 @@ export function buildStore(scene, loader) {
 
   // GENERAL MERCHANDISE half (east): electronics, apparel, toys, pharmacy
   floorZones(scene);
-  tvWall(scene, slots, colliders, rng);
+  const tvs = tvWall(scene, slots, colliders, rng);
   // two merch gondolas running ALONG X (cross-grain, breaks the boxy grid)
   const merchIslands = [
     { x: 10, z: -7.5, sections: [['electronics', 'electronics', 'home', 'electronics'], ['home', 'home', 'electronics', 'home']] },
@@ -1409,7 +1430,7 @@ export function buildStore(scene, loader) {
 
   return {
     colliders, bounds, stock, corridors, staffSpots,
-    physicsMeta: { gondolas: physGondolas, carts: cb.carts },
+    physicsMeta: { gondolas: physGondolas, carts: cb.carts, freezerGlass: freezer.glass, freezerCollider: freezer.collider, tvs },
     checkout: co.point, checkoutRing: ring,
     spawn: new THREE.Vector3(0.6, 1.65, 13.2),
 

@@ -50,4 +50,10 @@ export const SFX = {
   thud() { noise(0.14, 260, 0.4); tone(90, 0.12, 'sine', 0.3, 55); },
   crash() { noise(0.5, 900, 0.5); tone(70, 0.35, 'sine', 0.4, 40); setTimeout(() => noise(0.25, 500, 0.3), 120); },
   clatter() { [0, 60, 130, 210].forEach((ms, i) => setTimeout(() => tone(700 + Math.random() * 500, 0.05, 'square', 0.12), ms)); },
+  glass() {
+    noise(0.3, 4200, 0.42);
+    [0, 70, 140, 230, 340].forEach((ms) => setTimeout(() => tone(1600 + Math.random() * 1800, 0.09, 'triangle', 0.12), ms));
+  },
+  whoosh() { noise(0.18, 1200, 0.16); },
+  talk() { tone(620, 0.05, 'sine', 0.1, 700); },
 };

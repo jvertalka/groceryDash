@@ -65,8 +65,9 @@ try {
   camera.lookAt(0, 1.5, 0);
 
   const shoppers = createShoppers(scene, manager, world);
-  const game = createGame(scene, camera, world);
   world.getNpcs = () => shoppers.npcs;
+  world.npcTalk = { say: shoppers.say, talkTo: shoppers.talkTo };
+  const game = createGame(scene, camera, world);
   const physics = createPhysics({ scene, world, camera });
   world.physics = physics;
 
@@ -209,7 +210,7 @@ try {
     move(dt);
     physics.update(dt, camera.position, playerVel);
     world.update(dt, camera);
-    shoppers.update(dt);
+    shoppers.update(dt, camera);
     game.update(dt, playing);
     composer.render();
   }

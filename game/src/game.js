@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { SFX } from './sfx.js';
-import { buildProduct } from './products.js';
+import { buildProduct, byId } from './products.js';
 
 // Interaction layer over the instanced stock: aim → glow highlight + prompt →
 // E hides the instance and flies a real mesh into your basket; shopping list
@@ -102,6 +102,42 @@ export function createGame(scene, camera, world) {
     if (hideAfter) setTimeout(() => { if (!done) bannerEl.style.display = 'none'; }, hideAfter);
   }
 
+  // ---- throwing (Q) ----------------------------------------------------------
+  function tryThrow() {
+    if (!hover || done || !world.physics) return;
+    const h = hover; setHover(null);
+    if (h.debris) world.physics.throwDebrisMesh(h.debris);
+    else { h.hide(); world.physics.throwSpec(h.spec); }
+  }
+
+  // ---- talking (T) -----------------------------------------------------------
+  const _fwd = new THREE.Vector3(), _toN = new THREE.Vector3();
+  function facingNpc() {
+    if (!world.getNpcs) return null;
+    camera.getWorldDirection(_fwd);
+    let best = null, bestDot = 0.86;
+    for (const n of world.getNpcs()) {
+      _toN.set(n.x - camera.position.x, 0, n.z - camera.position.z);
+      const d = _toN.length();
+      if (d > 3.2 || d < 0.2) continue;
+      _toN.normalize();
+      const dot = _toN.x * _fwd.x + _toN.z * _fwd.z;
+      if (dot > bestDot) { bestDot = dot; best = n; }
+    }
+    return best;
+  }
+  function tryTalk() {
+    const n = facingNpc();
+    if (!n || !world.npcTalk) return;
+    const entry = list.find((e) => e.got < e.need);
+    const line = world.npcTalk.talkTo(n, {
+      nextSpec: entry ? byId(entry.id) : null,
+      damageCount: world.physics ? world.physics.damage.count : 0,
+      playerPos: camera.position,
+    });
+    if (line) SFX.talk();
+  }
+
   // ---- per-frame -----------------------------------------------------------
   function update(dt, locked) {
     for (let i = flyers.length - 1; i >= 0; i--) {
@@ -157,9 +193,13 @@ export function createGame(scene, camera, world) {
     } else if (hover) {
       const s = hover.spec;
       promptEl.style.display = 'block';
-      promptEl.innerHTML = `<b>${s.name}</b> · $${s.price.toFixed(2)} — <span class="key">E</span> take`;
+      promptEl.innerHTML = `<b>${s.name}</b> · $${s.price.toFixed(2)} — <span class="key">E</span> take · <span class="key">Q</span> throw`;
     } else {
-      promptEl.style.display = 'none';
+      const n = facingNpc();
+      if (n) {
+        promptEl.style.display = 'block';
+        promptEl.innerHTML = `<span class="key">T</span> ${n.staff ? 'Ask for help' : 'Talk'}`;
+      } else promptEl.style.display = 'none';
     }
   }
   function complete() {
@@ -178,10 +218,12 @@ export function createGame(scene, camera, world) {
 
   addEventListener('keydown', (e) => {
     if (e.code === 'KeyE') tryGrab();
+    if (e.code === 'KeyQ') tryThrow();
+    if (e.code === 'KeyT') tryTalk();
     if (e.code === 'KeyR' && done) reset();
     if (e.code === 'KeyM') SFX.toggleMute();
   });
 
   reset();
-  return { update, tryGrab, get list() { return list; }, get state() { return { listDone, done, time }; }, reset, complete };
+  return { update, tryGrab, tryThrow, tryTalk, facingNpc, get list() { return list; }, get state() { return { listDone, done, time }; }, reset, complete };
 }

@@ -235,6 +235,63 @@ function retargetIsSane(avatar, mixer, action) {
   return span.h > 1.15 && span.h < 2.3 && span.min > -0.45 && span.min < 0.5 && head.y > 1.25 && head.y < 2.1;
 }
 
+// ---------------------------------------------------------------- dialogue
+const LINES = {
+  smalltalk: [
+    'Oh, hi there! Lovely evening.', 'Have you tried the tinned assortment? Divine.',
+    'They moved the ketchup AGAIN.', 'Busy tonight, huh?', 'I only came in for milk. Look at this cart.',
+    'The lemons are gorgeous this week.', 'Don\'t sprint, dear, the floors are slick.',
+    'Two-for-five on chips. TWO. FOR. FIVE.', 'I can never find the bandages.', 'Nice cart technique.',
+  ],
+  annoyed: [
+    'Did you SEE what you did back there?!', 'You\'re paying for all that, you know.',
+    'Somebody call the manager...', 'This used to be a nice store.', 'Unbelievable. UNBELIEVABLE.',
+  ],
+  stepAside: ['Oh! Sorry, dear.', 'My bad — go ahead.', 'Oops, coming through!'],
+  staffGreet: ['Welcome in! Yell if you need anything.', 'Doing alright tonight?'],
+  hit: ['HEY! What is WRONG with you?!', 'OW! Security!!', 'Did you just THROW that?!', 'That\'s ASSAULT, buddy!'],
+};
+// wayfinding: sections -> where staff will point you
+const SECTION_LOC = {
+  pantry: 'aisle 2 or 3', snacks: 'aisle 2', household: 'aisle 5, far side', dairy: 'aisle 4',
+  bakery: 'the back wall', frozen: 'the freezer wall, left side', produce: 'the tables up front-left',
+  electronics: 'the back-right wall', home: 'center-right aisles', toys: 'the far right island',
+  pharmacy: 'the pharmacy counter, front right',
+};
+export function staffHintFor(spec) {
+  if (!spec) return 'Checkout\'s lanes one and two, hon.';
+  const loc = SECTION_LOC[spec.section] || 'around here somewhere';
+  return `${spec.name}? Try ${loc}.`;
+}
+export function pickLine(kind) { const a = LINES[kind] || LINES.smalltalk; return a[Math.floor(Math.random() * a.length)]; }
+
+// speech bubble billboard above an NPC's head
+function makeBubble() {
+  const c = document.createElement('canvas'); c.width = 512; c.height = 128;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.15, 0.29),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }),
+  );
+  m.renderOrder = 20; m.visible = false;
+  return { mesh: m, canvas: c, tex };
+}
+function drawBubble(b, text) {
+  const x = b.canvas.getContext('2d');
+  x.clearRect(0, 0, 512, 128);
+  x.font = '600 34px Arial';
+  const w = Math.min(492, x.measureText(text).width + 44);
+  const bx = (512 - w) / 2;
+  x.fillStyle = 'rgba(16,20,26,0.88)';
+  x.beginPath(); x.roundRect(bx, 14, w, 78, 18); x.fill();
+  x.strokeStyle = 'rgba(255,255,255,0.35)'; x.lineWidth = 3; x.stroke();
+  x.beginPath(); x.moveTo(236, 92); x.lineTo(276, 92); x.lineTo(256, 118); x.fill();
+  x.fillStyle = '#f2f5f8'; x.textAlign = 'center';
+  x.fillText(text, 256, 66, w - 40);
+  b.tex.needsUpdate = true;
+}
+
 export function createShoppers(scene, manager, world) {
   const npcs = [];
   const { xs, zMin, zMax, crossZ } = world.corridors;
@@ -304,7 +361,9 @@ export function createShoppers(scene, manager, world) {
       const idle = mixer.clipAction(src.idleClip), walk = mixer.clipAction(src.walkClip);
       idle.play(); walk.play(); walk.weight = 0; idle.weight = 1;
       idle.time = Math.random() * 2; walk.time = Math.random() * 1.2;
-      return { model, mixer, idle, walk };
+      const bubble = makeBubble();
+      scene.add(bubble.mesh);
+      return { model, mixer, idle, walk, bubble, bubbleT: 0 };
     };
     const count = 8;
     for (let i = 0; i < count; i++) {
@@ -312,10 +371,10 @@ export function createShoppers(scene, manager, world) {
       const p = spawnPerson(src);
       const browsing = i >= count - 2;
       const n = {
-        ...p, oneClip: false, facing: src.facing,
+        ...p, oneClip: false, facing: src.facing, staff: false,
         x: pick(xs), z: rand(zMin + 1, zMax - 1),
         yaw: rand(-Math.PI, Math.PI), speed: rand(0.8, 1.2),
-        path: [], pause: rand(0, 2), browsing,
+        path: [], pause: rand(0, 2), browsing, talkCd: 0,
       };
       if (browsing) {
         const ax = pick(world.corridors.browseXs || xs); const side = Math.random() < 0.5 ? -1 : 1;
@@ -341,7 +400,7 @@ export function createShoppers(scene, manager, world) {
       const spot = world.staffSpots[i];
       const src = cast[(i + 3) % cast.length];
       const p = spawnPerson(src);
-      const n = { ...p, oneClip: false, facing: src.facing, x: spot.x, z: spot.z, yaw: spot.yaw, speed: 0, path: [], pause: Infinity, browsing: true, home: { x: spot.x, z: spot.z } };
+      const n = { ...p, oneClip: false, facing: src.facing, staff: true, x: spot.x, z: spot.z, yaw: spot.yaw, speed: 0, path: [], pause: Infinity, browsing: true, home: { x: spot.x, z: spot.z }, talkCd: 0 };
       n.model.position.set(spot.x, 0, spot.z);
       n.model.rotation.y = spot.yaw + src.facing;
       scene.add(n.model);
@@ -359,9 +418,50 @@ export function createShoppers(scene, manager, world) {
     }
   }
 
-  function update(dt) {
+  // make an NPC say a line: speech bubble over the head + shared camera ref
+  let _camera = null;
+  function say(n, text) {
+    drawBubble(n.bubble, text);
+    n.bubble.mesh.visible = true;
+    n.bubbleT = 2.8;
+  }
+  // T-key response brain: staff give wayfinding for the next list item,
+  // shoppers do small talk (or scold you if you've been wrecking the place)
+  function talkTo(n, ctx) {
+    if (n.talkCd > 0) return null;
+    n.talkCd = 2.5;
+    let line;
+    if (n.staff) line = ctx.nextSpec ? staffHintFor(ctx.nextSpec) : pickLine('staffGreet');
+    else if ((ctx.damageCount || 0) >= 6) line = pickLine('annoyed');
+    else line = pickLine('smalltalk');
+    say(n, line);
+    // shoppers blocking you politely step aside
+    if (!n.staff && !n.browsing && ctx.playerPos) {
+      const dx = n.x - ctx.playerPos.x, dz = n.z - ctx.playerPos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 1.4) {
+        const px = -dz / d, pz = dx / d; // perpendicular
+        n.shove = { vx: px * 1.4, vz: pz * 1.4, t: 0.4 };
+        n.pause = Math.max(n.pause === Infinity ? 0 : n.pause, 0.8);
+        if (Math.random() < 0.7) { setTimeout(() => say(n, pickLine('stepAside')), 250); }
+      }
+    }
+    return line;
+  }
+
+  function update(dt, camera) {
+    if (camera) _camera = camera;
     for (const n of npcs) {
       n.mixer.update(dt);
+      if (n.talkCd > 0) n.talkCd -= dt;
+      // speech bubble: face camera, hover over head, fade out
+      if (n.bubbleT > 0) {
+        n.bubbleT -= dt;
+        n.bubble.mesh.position.set(n.x, 2.02, n.z);
+        if (_camera) n.bubble.mesh.lookAt(_camera.position);
+        n.bubble.mesh.material.opacity = Math.min(1, n.bubbleT / 0.4);
+        if (n.bubbleT <= 0) n.bubble.mesh.visible = false;
+      }
       // physics shove: stagger with the hit, wobble, then recover
       if (n.shove) {
         n.x += n.shove.vx * dt; n.z += n.shove.vz * dt;
@@ -417,5 +517,5 @@ export function createShoppers(scene, manager, world) {
     }
   }
 
-  return { update, npcs };
+  return { update, npcs, say, talkTo };
 }

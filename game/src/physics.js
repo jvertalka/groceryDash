@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { buildProduct } from './products.js';
+import { pickLine } from './characters.js';
 import { SFX } from './sfx.js';
 
 // Arcade physics for a fully interactive store. Not a general engine — three
@@ -143,6 +144,11 @@ export function createPhysics({ scene, world, camera }) {
   let crashCd = 0;
   function onPlayerBlocked(collider, speed, dx, dz) {
     if (crashCd > 0) return;
+    // crashing into the freezer wall breaks the nearest door's glass
+    if (glass && collider === world.physicsMeta.freezerCollider && speed >= KNOCK_SPEED) {
+      const door = nearestUnbrokenDoor(camera.position.z);
+      if (door) { crashCd = 0.5; breakGlass(door, 1, 0); return; }
+    }
     const g = gondolas.find((gg) => gg.collider === collider && !gg.tipped);
     if (g) {
       crashCd = 0.45;
@@ -173,10 +179,143 @@ export function createPhysics({ scene, world, camera }) {
       const d2 = ddx * ddx + ddz * ddz;
       if (d2 < r * r) {
         const d = Math.sqrt(d2) || 0.001;
-        return { nx: ddx / d, nz: ddz / d, depth: r - d };
+        return { nx: ddx / d, nz: ddz / d, depth: r - d, c };
       }
     }
     return null;
+  }
+
+  // ---- breakable freezer glass ----------------------------------------------
+  const glass = world.physicsMeta.freezerGlass || null;
+  const ZERO_M = new THREE.Matrix4().makeScale(0, 0, 0);
+  const shardGeo = new THREE.PlaneGeometry(0.07, 0.1);
+  const shardMat = new THREE.MeshStandardMaterial({ color: 0xcfe6f2, transparent: true, opacity: 0.75, roughness: 0.08, metalness: 0.3, envMapIntensity: 1.6, side: THREE.DoubleSide, depthWrite: false });
+  const shardIM = new THREE.InstancedMesh(shardGeo, shardMat, 160);
+  shardIM.count = 0; shardIM.frustumCulled = false; scene.add(shardIM);
+  const shards = []; // {p:Vector3, v:Vector3, rx, rz, wr, life}
+  const _sm = new THREE.Matrix4(), _sq = new THREE.Quaternion(), _se = new THREE.Euler(), _sv = new THREE.Vector3(1, 1, 1);
+  function burstShards(x, y, z, dirX, dirZ, n = 16) {
+    for (let i = 0; i < n; i++) {
+      shards.push({
+        p: new THREE.Vector3(x, y + (Math.random() - 0.5) * 1.2, z + (Math.random() - 0.5) * 0.6),
+        v: new THREE.Vector3(dirX * (0.5 + Math.random() * 2.2) + (Math.random() - 0.5), 0.5 + Math.random() * 1.5, dirZ * (0.5 + Math.random() * 2.2) + (Math.random() - 0.5) * 1.4),
+        rx: Math.random() * Math.PI, rz: Math.random() * Math.PI,
+        wr: (Math.random() - 0.5) * 14, life: 2.2 + Math.random(),
+      });
+    }
+  }
+  function breakGlass(door, dirX = 1, dirZ = 0) {
+    if (!glass || door.broken) return;
+    door.broken = true;
+    glass.im.setMatrixAt(door.index, ZERO_M);
+    glass.im.instanceMatrix.needsUpdate = true;
+    burstShards(door.x, door.y, door.z, dirX, dirZ);
+    // the frozen goods tumble out through the broken door — free to grab
+    const freed = world.stock.hideInRegion(door.spill, 9);
+    for (const h of freed) {
+      spawnDebrisNow(h.spec, h.x, h.y, h.z, h.rotY,
+        0.9 + Math.random() * 1.2, 0.4 + Math.random() * 0.6, (Math.random() - 0.5) * 0.8);
+    }
+    damageTotal += 25; damageCount++;
+    addShake(0.4);
+    SFX.glass();
+    toast('🥶 You break it, you bought it — door glass +$25.00');
+  }
+  function nearestUnbrokenDoor(z) {
+    if (!glass) return null;
+    let best = null, bd = 1e9;
+    for (const d of glass.doors) {
+      if (d.broken) continue;
+      const dd = Math.abs(d.z - z);
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    return bd < 1.2 ? best : null;
+  }
+
+  // ---- crackable TV screens ---------------------------------------------------
+  let _crackedTex = null;
+  function crackedTexture() {
+    if (_crackedTex) return _crackedTex;
+    const c = document.createElement('canvas'); c.width = 384; c.height = 216;
+    const x = c.getContext('2d');
+    x.fillStyle = '#0a0d11'; x.fillRect(0, 0, 384, 216);
+    x.strokeStyle = 'rgba(220,235,245,0.85)'; x.lineWidth = 2;
+    const cx = 150 + Math.random() * 80, cy = 90 + Math.random() * 40;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + Math.random() * 0.4;
+      x.beginPath(); x.moveTo(cx, cy);
+      let px = cx, py = cy;
+      for (let s = 0; s < 4; s++) {
+        px += Math.cos(a + (Math.random() - 0.5) * 0.6) * (18 + Math.random() * 30);
+        py += Math.sin(a + (Math.random() - 0.5) * 0.6) * (14 + Math.random() * 22);
+        x.lineTo(px, py);
+      }
+      x.stroke();
+    }
+    x.strokeStyle = 'rgba(150,170,185,0.4)';
+    for (let r = 14; r < 60; r += 16) { x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.stroke(); }
+    _crackedTex = new THREE.CanvasTexture(c);
+    _crackedTex.colorSpace = THREE.SRGBColorSpace;
+    return _crackedTex;
+  }
+  function crackTV(tv) {
+    if (tv.broken) return;
+    tv.broken = true;
+    const t = crackedTexture();
+    tv.mat.map = t; tv.mat.emissiveMap = t; tv.mat.emissiveIntensity = 0.12;
+    tv.mat.needsUpdate = true;
+    const fee = tv.price * 0.4;
+    damageTotal += fee; damageCount++;
+    addShake(0.3);
+    SFX.glass();
+    toast(`📺 That was a display model! +$${fee.toFixed(2)}`);
+  }
+
+  // ---- thrown projectiles -----------------------------------------------------
+  const projectiles = [];
+  function launch(mesh, spec, from, dir, speed) {
+    mesh.position.copy(from);
+    scene.add(mesh);
+    projectiles.push({
+      mesh, spec, t: 0,
+      // modest up-boost: aimed throws fly true at close range, lobs still arc
+      v: new THREE.Vector3(dir.x * speed, dir.y * speed + 0.8, dir.z * speed),
+      w: new THREE.Vector3((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 10),
+    });
+    SFX.whoosh();
+  }
+  const _dir = new THREE.Vector3();
+  function throwSpec(spec, bill = true) {
+    camera.getWorldDirection(_dir);
+    const from = camera.position.clone().addScaledVector(_dir, 0.45);
+    from.y -= 0.12;
+    launch(buildProduct(spec), spec, from, _dir, 11.5);
+    if (bill) { damageTotal += spec.price * 0.4; damageCount++; }
+  }
+  function throwDebrisMesh(mesh) {
+    const spec = mesh.userData.spec;
+    const i = debris.findIndex((d) => d.mesh === mesh);
+    if (i >= 0) { debris.splice(i, 1); syncDebrisList(); }
+    scene.remove(mesh);
+    mesh.scale.setScalar(1); mesh.rotation.set(0, mesh.rotation.y, 0);
+    camera.getWorldDirection(_dir);
+    const from = camera.position.clone().addScaledVector(_dir, 0.45);
+    from.y -= 0.12;
+    launch(mesh, spec, from, _dir, 11.5); // already billed when it was knocked
+  }
+  function adoptAsDebris(p, damp) {
+    debris.push({
+      mesh: p.mesh, spec: p.spec,
+      v: p.v.clone().multiplyScalar(damp),
+      w: p.w.clone().multiplyScalar(0.4),
+      resting: false, age: 0, fade: 0,
+    });
+    if (debris.length > DEBRIS_CAP) {
+      let idx = debris.findIndex((d) => d.resting);
+      if (idx < 0) idx = 0;
+      scene.remove(debris[idx].mesh); debris.splice(idx, 1);
+    }
+    syncDebrisList();
   }
 
   // ---- per-frame ------------------------------------------------------------
@@ -241,11 +380,32 @@ export function createPhysics({ scene, world, camera }) {
           if (vn < 0) {
             cart.vx -= (1 + 0.4) * vn * hit.nx;
             cart.vz -= (1 + 0.4) * vn * hit.nz;
+            // a fast cart into the freezer wall breaks the nearest door
+            if (glass && hit.c === world.physicsMeta.freezerCollider && -vn > 2.0) {
+              const door = nearestUnbrokenDoor(cart.z);
+              if (door) breakGlass(door, 1, 0);
+            }
             if (-vn > 2.6) {
               cart.tipped = true; cart.tipSign = Math.random() < 0.5 ? 1 : -1;
               addShake(0.35); SFX.crash();
               toast(CRASH_LINES[Math.floor(Math.random() * CRASH_LINES.length)]);
             } else if (-vn > 1.0) SFX.thud();
+          }
+        }
+        // a rolling cart bowls into shoppers
+        if (sp > 0.8) {
+          for (const n of (world.getNpcs ? world.getNpcs() : [])) {
+            if (n.shoveCd > 0) continue;
+            const ndx = n.x - cart.x, ndz = n.z - cart.z;
+            const nd = Math.hypot(ndx, ndz);
+            if (nd < CART_R + 0.32 && nd > 0.001) {
+              n.shove = { vx: cart.vx * 0.8, vz: cart.vz * 0.8, t: 0.6 };
+              n.shoveCd = 1.3;
+              if (!n.staff) n.pause = Math.max(n.pause === Infinity ? 0 : n.pause, 1.0);
+              cart.vx *= 0.55; cart.vz *= 0.55;
+              SFX.thud();
+              if (world.npcTalk) world.npcTalk.say(n, pickLine('hit'));
+            }
           }
         }
         // bounds
@@ -276,6 +436,87 @@ export function createPhysics({ scene, world, camera }) {
 
     // drain queued spawns a few per frame (big spills would hitch otherwise)
     for (let i = 0; i < SPAWNS_PER_FRAME && spawnQueue.length; i++) spawnDebrisNow(...spawnQueue.shift());
+
+    // thrown projectiles: fly, spin, and connect with whatever's in the way
+    for (let pi = projectiles.length - 1; pi >= 0; pi--) {
+      const p = projectiles[pi];
+      p.t += dt;
+      p.v.y -= 8.5 * dt;
+      p.mesh.position.addScaledVector(p.v, dt);
+      p.mesh.rotation.x += p.w.x * dt; p.mesh.rotation.y += p.w.y * dt; p.mesh.rotation.z += p.w.z * dt;
+      const pos = p.mesh.position;
+      let done = false;
+      // vs NPCs
+      for (const n of (world.getNpcs ? world.getNpcs() : [])) {
+        const nd = Math.hypot(n.x - pos.x, n.z - pos.z);
+        if (nd < 0.42 && pos.y > 0.2 && pos.y < 1.9) {
+          n.shove = { vx: p.v.x * 0.3, vz: p.v.z * 0.3, t: 0.6 };
+          n.shoveCd = 0.8;
+          if (!n.staff) n.pause = Math.max(n.pause === Infinity ? 0 : n.pause, 1.2);
+          if (world.npcTalk) world.npcTalk.say(n, pickLine('hit'));
+          SFX.thud(); addShake(0.12);
+          toast('🎯 Direct hit!');
+          adoptAsDebris(p, 0.2); done = true; break;
+        }
+      }
+      // vs freezer glass
+      if (!done && glass) {
+        for (const door of glass.doors) {
+          if (door.broken) continue;
+          if (pos.x < door.x + 0.14 && pos.x > door.x - 0.3 && Math.abs(pos.z - door.z) < door.w / 2 && pos.y > 0.5 && pos.y < 2.0) {
+            breakGlass(door, p.v.x > 0 ? -1 : 1, 0);
+            adoptAsDebris(p, 0.15); done = true; break;
+          }
+        }
+      }
+      // vs TV screens
+      if (!done && world.physicsMeta.tvs) {
+        for (const tv of world.physicsMeta.tvs) {
+          if (tv.broken) continue;
+          if (Math.abs(pos.x - tv.x) < 0.62 && Math.abs(pos.y - tv.y) < 0.45 && pos.z < tv.z + 0.25 && pos.z > tv.z - 0.45) {
+            crackTV(tv);
+            adoptAsDebris(p, 0.1); done = true; break;
+          }
+        }
+      }
+      // vs fixtures / bounds / floor / timeout — colliders are 2D footprints,
+      // so only stop throws flying at fixture height (clears low platforms)
+      if (!done) {
+        const hit = pos.y < 1.75 ? circleVsColliders(pos.x, pos.z, 0.12) : null;
+        const b = world.bounds;
+        const oob = pos.x < b.minX || pos.x > b.maxX || pos.z < b.minZ || pos.z > b.maxZ;
+        if (hit || oob) {
+          if (hit) { pos.x += hit.nx * hit.depth; pos.z += hit.nz * hit.depth; }
+          else { pos.x = Math.max(b.minX, Math.min(b.maxX, pos.x)); pos.z = Math.max(b.minZ, Math.min(b.maxZ, pos.z)); }
+          SFX.thud();
+          adoptAsDebris(p, 0.25); done = true;
+        } else if (pos.y <= 0.04 || p.t > 4) {
+          adoptAsDebris(p, 0.4); done = true;
+        }
+      }
+      if (done) projectiles.splice(pi, 1);
+    }
+
+    // glass shards: fall, tumble, expire
+    if (shards.length) {
+      let si = 0;
+      for (let i = shards.length - 1; i >= 0; i--) {
+        const s = shards[i];
+        s.life -= dt;
+        if (s.life <= 0 || s.p.y < 0.01) { shards.splice(i, 1); continue; }
+        s.v.y -= 9.8 * dt;
+        s.p.addScaledVector(s.v, dt);
+        s.rx += s.wr * dt; s.rz += s.wr * 0.7 * dt;
+      }
+      for (const s of shards) {
+        _se.set(s.rx, 0, s.rz);
+        _sq.setFromEuler(_se);
+        _sm.compose(s.p, _sq, _sv);
+        shardIM.setMatrixAt(si++, _sm);
+      }
+      shardIM.count = si;
+      shardIM.instanceMatrix.needsUpdate = true;
+    } else if (shardIM.count) shardIM.count = 0;
 
     // debris ballistics + resting-clutter cleanup fade
     let removedAny = false;
@@ -342,9 +583,10 @@ export function createPhysics({ scene, world, camera }) {
   }
 
   return {
-    update, onPlayerBlocked, toast,
+    update, onPlayerBlocked, toast, throwSpec, throwDebrisMesh, breakGlass, crackTV,
     get shake() { return shake; },
     get damage() { return { total: damageTotal, count: damageCount }; },
+    get projectileCount() { return projectiles.length; },
     debrisMeshes: debrisMeshList, // stable reference, mutated in place
     removeDebris(mesh) {
       const i = debris.findIndex((d) => d.mesh === mesh);
