@@ -102,7 +102,12 @@ function dressAvatar(fbx, name, texLoader) {
       return body;
     });
     o.material = Array.isArray(o.material) ? swapped : swapped[0];
-    o.castShadow = false; o.receiveShadow = false; o.frustumCulled = false;
+    o.castShadow = false; o.receiveShadow = false;
+    // skinned bind-pose bounds are useless for culling, but a generous manual
+    // sphere (geometry is in native cm, origin at the feet) lets off-screen
+    // shoppers cull instead of paying skinning cost every frame
+    o.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 95, 0), 140);
+    o.frustumCulled = true;
   });
 }
 

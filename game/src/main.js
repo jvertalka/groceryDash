@@ -165,42 +165,59 @@ try {
   }
 
   // ---------------------------------------------------------------- loop
-  // Progressive quality: START in the lite tier (no GTAO, no rect-area wash
-  // lights, half the shadow spots) so weak GPUs are smooth from frame one,
-  // then UPGRADE if the GPU proves fast. Starting heavy and degrading later
-  // meant integrated GPUs chugged through the first several seconds.
-  let frames = 0, acc = 0, tier = 'lite';
-  {
+  // CONTINUOUS adaptive quality. The old controller measured once at startup
+  // and could lock the expensive tier forever on a mismeasure; this one keeps
+  // a rolling frame-time average for the whole session and moves between
+  // tiers with hysteresis — including DOWN, at any time.
+  let frames = 0, tier = 'lite';
+  const win = new Float32Array(45); let wi = 0, wn = 0;
+  let settleCd = 3; // seconds to wait after any tier change before re-judging
+  function setLights(rect, everyShadow) {
     let si = 0;
     scene.traverse((o) => {
-      if (o.isRectAreaLight) o.visible = false;
-      if (o.isSpotLight && si++ % 2 === 1) o.castShadow = false;
+      if (o.isRectAreaLight) o.visible = rect;
+      if (o.isSpotLight) {
+        const on = everyShadow || si++ % 2 === 0;
+        o.castShadow = on;
+        if (on) o.shadow.needsUpdate = true;
+      }
     });
   }
-  function applyHigh() {
-    tier = 'high';
-    gtao.enabled = true;
-    scene.traverse((o) => {
-      if (o.isRectAreaLight) o.visible = true;
-      if (o.isSpotLight) { o.castShadow = true; o.shadow.needsUpdate = true; }
-    });
+  function applyTier(t) {
+    if (t === tier) return;
+    tier = t; window.__tier = t;
+    settleCd = 3; wn = 0; wi = 0;
+    if (t === 'high') { gtao.enabled = true; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25)); setLights(true, true); }
+    if (t === 'lite') { gtao.enabled = false; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.1)); setLights(false, false); }
+    if (t === 'panic') { gtao.enabled = false; renderer.setPixelRatio(0.85); setLights(false, false); }
+    composer.setSize(innerWidth, innerHeight);
+  }
+  { // boot into lite
+    gtao.enabled = false;
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.1));
+    setLights(false, false);
+    window.__tier = 'lite';
   }
   function autoQuality(dt) {
+    frames++;
     if (frames === 3) {
       // store geometry is static — render each shadow map once, then freeze it
       scene.traverse((o) => { if (o.isSpotLight) { o.shadow.needsUpdate = true; o.shadow.autoUpdate = false; } });
     }
+    if (frames < 30) return; // ignore warm-up
+    if (settleCd > 0) { settleCd -= dt; return; }
+    win[wi] = dt; wi = (wi + 1) % win.length; wn = Math.min(wn + 1, win.length);
+    if (wn < win.length) return;
+    let sum = 0; for (let i = 0; i < wn; i++) sum += win[i];
+    const avg = sum / wn;
     if (tier === 'lite') {
-      if (frames > 20 && frames <= 80) acc += dt;
-      if (frames === 80) {
-        const avg = acc / 60;
-        if (avg < 0.02) applyHigh(); // headroom for the pretty passes
-        else if (avg > 0.055) { renderer.setPixelRatio(1); composer.setSize(innerWidth, innerHeight); tier = 'panic'; }
-        else tier = 'lite-locked';
-        window.__tier = tier;
-      }
+      if (avg < 0.013) applyTier('high');
+      else if (avg > 0.045) applyTier('panic');
+    } else if (tier === 'high') {
+      if (avg > 0.024) applyTier('lite');
+    } else if (tier === 'panic') {
+      if (avg < 0.022) applyTier('lite');
     }
-    frames++;
   }
   const clock = new THREE.Clock();
   function animate() {
@@ -208,6 +225,7 @@ try {
     const dt = Math.min(clock.getDelta(), 0.05);
     autoQuality(dt);
     move(dt);
+    world.stock.cull(camera.position);
     physics.update(dt, camera.position, playerVel);
     world.update(dt, camera);
     shoppers.update(dt, camera);
