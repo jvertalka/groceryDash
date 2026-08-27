@@ -331,7 +331,9 @@ export function createShoppers(scene, manager, world) {
         let walkClip = null, idleClip = null;
         try {
           walkClip = bakeRetarget(donor.scene, donorSkin, fbx, skinned, walkSrc, BIP_TO_MIXAMO);
+          await new Promise((r) => setTimeout(r, 0)); // each bake blocks ~100ms — yield between them
           idleClip = bakeRetarget(donor.scene, donorSkin, fbx, skinned, idleSrc, BIP_TO_MIXAMO);
+          await new Promise((r) => setTimeout(r, 0));
           const mixer = new THREE.AnimationMixer(fbx);
           const act = mixer.clipAction(walkClip);
           if (!retargetIsSane(fbx, mixer, act)) {

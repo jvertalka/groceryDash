@@ -719,6 +719,64 @@ function exterior(scene, loader) {
   return { flicker };
 }
 
+// ------------------------------------------------------------- baked light
+// Runtime "bake": a floor lightmap painted from the real fixture positions —
+// bright pools under every troffer run, warm washes at produce/checkout,
+// darkness under fixtures and along the walls. Costs nothing per frame and
+// reads as global illumination, which is the core of the AAA interior look.
+function bakeFloorLightmap(floorMat) {
+  const W = 1024, H = Math.round(1024 * STORE.d / STORE.w);
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const u = (wx) => (wx + STORE.w / 2) / STORE.w * W;
+  const v = (wz) => (wz + STORE.d / 2) / STORE.d * H;
+  const sx = W / STORE.w, sz = H / STORE.d;
+  // dim ambient base
+  x.fillStyle = '#5e5e60'; x.fillRect(0, 0, W, H);
+  // troffer corridor runs: soft bright bands along each corridor x
+  for (const cx of [-20, -16, -12, -8, -4, 0, 4, 8, 12, 16, 20]) {
+    const g = x.createLinearGradient(u(cx) - 2.1 * sx, 0, u(cx) + 2.1 * sx, 0);
+    g.addColorStop(0, 'rgba(255,250,238,0)');
+    g.addColorStop(0.5, 'rgba(255,250,238,0.55)');
+    g.addColorStop(1, 'rgba(255,250,238,0)');
+    x.fillStyle = g;
+    x.fillRect(u(cx) - 2.1 * sx, v(-13.5), 4.2 * sx, (13.5 + 13.8) * sz);
+  }
+  // warm pools under the feature spots (produce, checkout, pharmacy, alley)
+  for (const [px, pz, r, a] of [[-17.7, 10.7, 5, 0.5], [-8.6, 10.6, 5, 0.42], [18.5, 10, 4.5, 0.4], [0, -6, 5, 0.35], [10, -7, 5, 0.35], [8.5, 4, 5, 0.35]]) {
+    const g = x.createRadialGradient(u(px), v(pz), 2, u(px), v(pz), r * sx);
+    g.addColorStop(0, `rgba(255,240,214,${a})`);
+    g.addColorStop(1, 'rgba(255,240,214,0)');
+    x.fillStyle = g;
+    x.beginPath(); x.arc(u(px), v(pz), r * sx, 0, Math.PI * 2); x.fill();
+  }
+  // darkness under the fixtures (gondolas, freezer, back shelf, checkout row)
+  x.fillStyle = 'rgba(20,20,24,0.42)';
+  for (const gx of [-18, -14, -10, -6]) x.fillRect(u(gx - 0.6), v(-11.2), 1.2 * sx, 16.4 * sz);
+  x.fillRect(u(-23), v(-5.9), 0.95 * sx, 11.8 * sz);            // freezer
+  x.fillRect(u(-21.2), v(-14.8), 16.4 * sx, 0.8 * sz);          // back shelf
+  x.fillRect(u(3.9), v(-8.1), 12.2 * sx, 1.2 * sz);             // merch island 1
+  x.fillRect(u(3.9), v(-4.1), 12.2 * sx, 1.2 * sz);             // merch island 2
+  x.fillRect(u(18.9), v(-7.2), 1.2 * sx, 10.4 * sz);            // toys island
+  x.fillRect(u(-11.3), v(9.2), 10.7 * sx, 2.8 * sz);            // checkout row
+  // perimeter falloff
+  const edge = x.createLinearGradient(0, 0, 0, 8 * sz);
+  edge.addColorStop(0, 'rgba(16,16,20,0.5)'); edge.addColorStop(1, 'rgba(16,16,20,0)');
+  x.fillStyle = edge; x.fillRect(0, 0, W, 8 * sz);
+  const edge2 = x.createLinearGradient(0, H, 0, H - 8 * sz);
+  edge2.addColorStop(0, 'rgba(16,16,20,0.5)'); edge2.addColorStop(1, 'rgba(16,16,20,0)');
+  x.fillStyle = edge2; x.fillRect(0, H - 8 * sz, W, 8 * sz);
+  // soft blur pass for bake-like smoothness
+  x.filter = 'blur(6px)'; x.drawImage(c, 0, 0); x.filter = 'none';
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.flipY = true;
+  floorMat.lightMap = tex;
+  floorMat.lightMapIntensity = 1.15;
+  floorMat.needsUpdate = true;
+}
+
 // ------------------------------------------------------------- lighting
 function lighting(scene) {
   const y = STORE.h;
@@ -756,7 +814,8 @@ function lighting(scene) {
     s.position.set(sx, y - 0.12, sz);
     s.target.position.set(sx, 0, sz);
     s.castShadow = true;
-    s.shadow.mapSize.set(1024, 1024);
+    s.shadow.mapSize.set(2048, 2048); // maps are frozen after first render — crispness is free
+
     s.shadow.camera.near = 0.5; s.shadow.camera.far = 14; s.shadow.bias = -0.0005;
     scene.add(s, s.target);
   }
@@ -781,7 +840,7 @@ const cardboardMat = () => new THREE.MeshStandardMaterial({ map: canvasTex(128, 
 
 // endcap displays: cut-case cardboard trays stacked at each gondola end, with
 // products (added to the instanced stock, so they're even grabbable) + SALE sign
-function endcaps(scene, slots, colliders, rng) {
+function endcaps(scene, slots, colliders, rng, cullables) {
   const card = cardboardMat();
   const trayGeo = new THREE.BoxGeometry(0.78, 0.16, 0.5);
   const spots = [];
@@ -810,6 +869,7 @@ function endcaps(scene, slots, colliders, rng) {
     colliders.push({ minX: ex - 0.45, maxX: ex + 0.45, minZ: ez - 0.3, maxZ: ez + 0.3 });
   });
   trays.instanceMatrix.needsUpdate = true; trays.computeBoundingSphere(); scene.add(trays);
+  if (cullables) cullables.push(trays);
 }
 
 // shrink-wrapped pallet stacks (water / soda cases) parked in dead corners
@@ -1271,7 +1331,7 @@ function kitProps(scene, colliders) {
 }
 
 // yellow deal tags sprinkled along shelf rails
-function saleTags(scene, rng) {
+function saleTags(scene, rng, cullables) {
   const texts = [saleTagTex('2 FOR', '$5.00'), saleTagTex('SAVE', '$1.00'), saleTagTex('NEW!', 'try me', '#c9241a', '#fff')];
   const geo = new THREE.PlaneGeometry(0.1, 0.058);
   for (let t = 0; t < texts.length; t++) {
@@ -1287,12 +1347,13 @@ function saleTags(scene, rng) {
       im.setMatrixAt(i, m4);
     }
     im.instanceMatrix.needsUpdate = true; im.computeBoundingSphere(); scene.add(im);
+    if (cullables) cullables.push(im);
   }
 }
 
 // ------------------------------------------------------------- price tags
 // One InstancedMesh per SKU (tags share geometry; texture differs per SKU).
-function buildTags(scene, tagSlots) {
+function buildTags(scene, tagSlots, cullables) {
   const geo = new THREE.PlaneGeometry(0.09, 0.034);
   const bySpec = new Map();
   for (const t of tagSlots) {
@@ -1310,6 +1371,7 @@ function buildTags(scene, tagSlots) {
     im.instanceMatrix.needsUpdate = true;
     im.computeBoundingSphere();
     scene.add(im);
+    if (cullables) cullables.push(im);
   }
 }
 
@@ -1328,8 +1390,11 @@ export function buildStore(scene, loader) {
   // waxed look via low roughness + boosted env reflection (clearcoat is too
   // costly per-pixel on integrated GPUs for a floor this large)
   const floorMat = loadPBR(loader, 'floor', [w / 2, d / 2], { roughness: 0.42, envMapIntensity: 1.5 });
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), floorMat);
+  const floorGeo = new THREE.PlaneGeometry(w, d);
+  floorGeo.setAttribute('uv1', floorGeo.attributes.uv.clone()); // ao/light maps read TEXCOORD1
+  const floor = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; scene.add(floor);
+  bakeFloorLightmap(floorMat);
 
   const wallMat = loadPBR(loader, 'wall', [w / 3, h / 3]);
   const wallMatZ = loadPBR(loader, 'wall', [d / 3, h / 3]);
@@ -1466,20 +1531,21 @@ export function buildStore(scene, loader) {
   kitProps(scene, colliders);
 
   // set dressing (endcaps + checkout racks add product slots — before buildStock)
+  const cullables = []; // extra whole-store batches for distance culling
   const ext = exterior(scene, loader);
-  endcaps(scene, slots, colliders, rng);
+  endcaps(scene, slots, colliders, rng, cullables);
   palletStacks(scene, colliders, rng);
   checkoutExtras(scene, slots, rng);
   produceExtras(scene);
   wallDressing(scene);
   floorProps(scene, colliders);
-  saleTags(scene, rng);
+  saleTags(scene, rng, cullables);
 
   contactAO(scene, colliders);
 
   // instantiate all products + price tags
   const stock = buildStock(scene, slots);
-  buildTags(scene, tagSlots);
+  buildTags(scene, tagSlots, cullables);
 
   const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.68, 40), new THREE.MeshStandardMaterial({ color: 0x35c46a, emissive: 0x35c46a, emissiveIntensity: 1.0, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
   ring.rotation.x = -Math.PI / 2; ring.position.set(co.point.x, 0.02, co.point.z);
@@ -1504,7 +1570,7 @@ export function buildStore(scene, loader) {
   ];
 
   return {
-    colliders, bounds, stock, corridors, staffSpots,
+    colliders, bounds, stock, corridors, staffSpots, cullables,
     physicsMeta: { gondolas: physGondolas, carts: cb.carts, freezerGlass: freezer.glass, freezerCollider: freezer.collider, tvs },
     checkout: co.point, checkoutRing: ring,
     spawn: new THREE.Vector3(0.6, 1.65, 13.2),

@@ -186,20 +186,30 @@ try {
       }
     });
   }
+  // DYNAMIC RESOLUTION (the AAA no-lag tool): render scale floats 0.7–1.15,
+  // nudged every ~0.75s to hold frame time; tiers only toggle the passes.
+  let resScale = Math.min(devicePixelRatio, 1.0);
+  const resMax = () => (tier === 'high' ? Math.min(devicePixelRatio, 1.25) : Math.min(devicePixelRatio, 1.15));
+  let resCd = 0;
+  function applyRes() {
+    renderer.setPixelRatio(resScale);
+    composer.setSize(innerWidth, innerHeight);
+  }
   function applyTier(t) {
     if (t === tier) return;
     tier = t; window.__tier = t;
     settleCd = 3; wn = 0; wi = 0;
-    if (t === 'high') { gtao.enabled = true; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25)); setLights(true, true); }
-    if (t === 'lite') { gtao.enabled = false; renderer.setPixelRatio(Math.min(devicePixelRatio, 1.1)); setLights(false, false); }
-    if (t === 'panic') { gtao.enabled = false; renderer.setPixelRatio(0.85); setLights(false, false); }
-    composer.setSize(innerWidth, innerHeight);
+    if (t === 'high') { gtao.enabled = true; setLights(true, true); }
+    else { gtao.enabled = false; setLights(false, false); }
+    resScale = Math.min(resScale, resMax());
+    applyRes();
   }
   { // boot into lite
     gtao.enabled = false;
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.1));
     setLights(false, false);
+    applyRes();
     window.__tier = 'lite';
+    window.__resScale = () => resScale;
   }
   function autoQuality(dt) {
     frames++;
@@ -208,18 +218,25 @@ try {
       scene.traverse((o) => { if (o.isSpotLight) { o.shadow.needsUpdate = true; o.shadow.autoUpdate = false; } });
     }
     if (frames < 30) return; // ignore warm-up
-    if (settleCd > 0) { settleCd -= dt; return; }
     win[wi] = dt; wi = (wi + 1) % win.length; wn = Math.min(wn + 1, win.length);
+    if (settleCd > 0) { settleCd -= dt; return; }
     if (wn < win.length) return;
     let sum = 0; for (let i = 0; i < wn; i++) sum += win[i];
     const avg = sum / wn;
+    // continuous resolution control
+    resCd -= dt;
+    if (resCd <= 0) {
+      let next = resScale;
+      if (avg > 0.022) next = Math.max(0.7, resScale - 0.07);
+      else if (avg < 0.014) next = Math.min(resMax(), resScale + 0.05);
+      if (Math.abs(next - resScale) > 0.02) { resScale = next; applyRes(); resCd = 0.75; }
+      else resCd = 0.4;
+    }
+    // pass/light tiers move only on sustained extremes
     if (tier === 'lite') {
-      if (avg < 0.013) applyTier('high');
-      else if (avg > 0.045) applyTier('panic');
+      if (avg < 0.012 && resScale >= resMax() - 0.01) applyTier('high');
     } else if (tier === 'high') {
-      if (avg > 0.024) applyTier('lite');
-    } else if (tier === 'panic') {
-      if (avg < 0.022) applyTier('lite');
+      if (avg > 0.026) applyTier('lite');
     }
   }
   const clock = new THREE.Clock();
@@ -230,6 +247,13 @@ try {
     autoQuality(dt);
     move(dt);
     world.stock.cull(camera.position);
+    for (const im of world.cullables) {
+      const s = im.boundingSphere;
+      if (!s) continue;
+      const dx = s.center.x - camera.position.x, dz = s.center.z - camera.position.z;
+      const reach = 12 + s.radius;
+      im.visible = dx * dx + dz * dz < reach * reach;
+    }
     physics.update(dt, camera.position, playerVel);
     world.update(dt, camera);
     shoppers.update(dt, camera);
