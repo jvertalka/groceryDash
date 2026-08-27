@@ -51,6 +51,7 @@ export function createPhysics({ scene, world, camera }) {
   const debrisMeshList = []; // stable array — rebuilt in place, no per-frame allocs
   const spawnQueue = [];     // pending spawns, drained a few per frame
   let damageTotal = 0, damageCount = 0;
+  const runEvents = { tips: 0, glass: 0, tvs: 0, hits: 0 }; // per-run counters for scoring/achievements
   function syncDebrisList() {
     debrisMeshList.length = 0;
     for (const d of debris) debrisMeshList.push(d.mesh);
@@ -137,6 +138,7 @@ export function createPhysics({ scene, world, camera }) {
     }
     addShake(0.9);
     SFX.crash();
+    runEvents.tips++;
     toast(`📢 CLEANUP ON AISLE ${g.label || ''} — ALL OF IT.`);
   }
 
@@ -217,6 +219,7 @@ export function createPhysics({ scene, world, camera }) {
         0.9 + Math.random() * 1.2, 0.4 + Math.random() * 0.6, (Math.random() - 0.5) * 0.8);
     }
     damageTotal += 25; damageCount++;
+    runEvents.glass++;
     addShake(0.4);
     SFX.glass();
     toast('🥶 You break it, you bought it — door glass +$25.00');
@@ -266,6 +269,7 @@ export function createPhysics({ scene, world, camera }) {
     tv.mat.needsUpdate = true;
     const fee = tv.price * 0.4;
     damageTotal += fee; damageCount++;
+    runEvents.tvs++;
     addShake(0.3);
     SFX.glass();
     toast(`📺 That was a display model! +$${fee.toFixed(2)}`);
@@ -455,6 +459,7 @@ export function createPhysics({ scene, world, camera }) {
           if (!n.staff) n.pause = Math.max(n.pause === Infinity ? 0 : n.pause, 1.2);
           if (world.npcTalk) world.npcTalk.say(n, pickLine('hit'));
           SFX.thud(); addShake(0.12);
+          runEvents.hits++;
           toast('🎯 Direct hit!');
           adoptAsDebris(p, 0.2); done = true; break;
         }
@@ -586,6 +591,8 @@ export function createPhysics({ scene, world, camera }) {
     update, onPlayerBlocked, toast, throwSpec, throwDebrisMesh, breakGlass, crackTV,
     get shake() { return shake; },
     get damage() { return { total: damageTotal, count: damageCount }; },
+    get runEvents() { return runEvents; },
+    resetRun() { damageTotal = 0; damageCount = 0; runEvents.tips = 0; runEvents.glass = 0; runEvents.tvs = 0; runEvents.hits = 0; },
     get projectileCount() { return projectiles.length; },
     debrisMeshes: debrisMeshList, // stable reference, mutated in place
     removeDebris(mesh) {

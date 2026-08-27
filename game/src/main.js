@@ -13,6 +13,9 @@ import { buildStore, STORE } from './store.js';
 import { createShoppers } from './characters.js';
 import { createGame } from './game.js';
 import { createPhysics } from './physics.js';
+import { createCartRig } from './cartrig.js';
+import { createMenu } from './menu.js';
+import { loadSave } from './save.js';
 import { SFX } from './sfx.js';
 
 const boot = document.getElementById('boot');
@@ -65,12 +68,15 @@ try {
   camera.position.copy(world.spawn);
   camera.lookAt(0, 1.5, 0);
 
+  loadSave();
   const shoppers = createShoppers(scene, manager, world);
   world.getNpcs = () => shoppers.npcs;
   world.npcTalk = { say: shoppers.say, talkTo: shoppers.talkTo };
   const game = createGame(scene, camera, world);
   const physics = createPhysics({ scene, world, camera });
   world.physics = physics;
+  const cartRig = createCartRig(scene, camera);
+  world.cartRig = cartRig;
 
   // ---------------------------------------------------------------- post
   const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { samples: 2, type: THREE.HalfFloatType });
@@ -107,14 +113,33 @@ try {
     setTimeout(() => (hint.style.opacity = '0'), 5000);
   }
   document.addEventListener('pointerlockerror', enableFallback);
-  addEventListener('click', () => {
-    if (boot.style.display !== 'none' || playing) return;
-    try { controls.lock(); } catch { enableFallback(); }
-    // some embeds swallow the request without firing pointerlockerror
+  // the MENU drives when we lock; a bare click only re-locks mid-run
+  const requestLock = () => {
+    SFX.start();
+    if (fallbackLook) { playing = true; crosshair.style.display = 'block'; return; }
+    try { controls.lock(); } catch (e) { enableFallback(); }
     setTimeout(() => { if (!controls.isLocked && !fallbackLook) enableFallback(); }, 350);
+  };
+  const releaseLock = () => {
+    playing = false;
+    crosshair.style.display = 'none';
+    if (controls.isLocked && document.exitPointerLock) document.exitPointerLock();
+  };
+  addEventListener('click', () => {
+    if (boot.style.display === 'none' && menu && menu.state === 'ingame' && !playing) requestLock();
   });
-  controls.addEventListener('lock', () => { playing = true; SFX.start(); crosshair.style.display = 'block'; hint.style.opacity = '0'; });
-  controls.addEventListener('unlock', () => { if (!fallbackLook) playing = false; crosshair.style.display = 'none'; });
+  controls.addEventListener('lock', () => { playing = true; crosshair.style.display = 'block'; hint.style.opacity = '0'; });
+  controls.addEventListener('unlock', () => {
+    if (!fallbackLook) playing = false;
+    crosshair.style.display = 'none';
+    // Esc during a run = pause menu
+    if (menu && menu.state === 'ingame') menu.showPause();
+  });
+  addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && fallbackLook && menu) {
+      if (menu.state === 'ingame') menu.showPause();
+    }
+  });
 
   // drag-to-look (fallback mode only)
   let dragging = false, lastX = 0, lastY = 0;
@@ -246,6 +271,7 @@ try {
     cinematic.uniforms.uTime.value = (cinematic.uniforms.uTime.value + dt) % 1000;
     autoQuality(dt);
     move(dt);
+    cartRig.update(dt, playing && game.state.runState === 'running', playerVel, physics.shake);
     world.stock.cull(camera.position);
     for (const im of world.cullables) {
       const s = im.boundingSphere;
@@ -269,6 +295,9 @@ try {
     gtao.setSize(innerWidth, innerHeight);
   });
 
+  world.playerSpeed = () => Math.hypot(playerVel.x, playerVel.z);
+  const menu = createMenu({ game, world, requestLock, releaseLock });
+
   // debug / verification hooks
   Object.assign(window, {
     __scene: scene, __camera: camera, __renderer: renderer, __composer: composer,
@@ -276,6 +305,7 @@ try {
     __stock: world.stock, __npcs: shoppers.npcs, __npcUpdate: shoppers.update, __ready: true,
     __move: move, __setPlaying: (v) => (playing = v), __isPlaying: () => playing, __isFallback: () => fallbackLook,
     __physics: physics, __keys: keys, __playerVel: playerVel,
+    __menu: menu, __cartRig: cartRig,
   });
 } catch (e) {
   window.__err = (e && e.stack) || String(e);
