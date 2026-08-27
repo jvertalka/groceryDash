@@ -531,7 +531,8 @@ function exterior(scene, loader) {
   // sky dome + asphalt ground
   const dome = new THREE.Mesh(new THREE.SphereGeometry(85, 24, 12), new THREE.MeshBasicMaterial({ map: skyTex(), side: THREE.BackSide, fog: false }));
   dome.position.set(0, 0, zFront); scene.add(dome);
-  const lotMat = loadPBR(loader, 'asphalt', [26, 17], { fog: false, envMapIntensity: 0.35 });
+  // rained-earlier wet look: low roughness + strong env pickup = light streaks
+  const lotMat = loadPBR(loader, 'asphalt', [26, 17], { fog: false, roughness: 0.5, envMapIntensity: 1.0 });
   const lot = new THREE.Mesh(new THREE.PlaneGeometry(140, 90), lotMat);
   lot.rotation.x = -Math.PI / 2; lot.position.set(0, -0.02, zFront + 45); scene.add(lot);
   // sidewalk + curb face
@@ -667,20 +668,55 @@ function exterior(scene, loader) {
     g.position.set(20.4, 0, zFront + 6.4);
     scene.add(g);
   }
-  // lamp posts with fake light pools
-  for (const lx of [-17, -3, 12]) {
+  // lamp posts: fake light pools + volumetric-style cones + one flickerer
+  const flicker = [];
+  [-17, -3, 12].forEach((lx, li) => {
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 5.6, 8), new THREE.MeshStandardMaterial({ color: 0x2f3338, roughness: 0.6, metalness: 0.8, fog: false }));
     pole.position.set(lx, 2.8, zFront + 6.2); scene.add(pole);
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.14, 0.36), new THREE.MeshStandardMaterial({ color: 0x30343a, emissive: 0xffd9a0, emissiveIntensity: 2.4, fog: false }));
     head.position.set(lx, 5.55, zFront + 6.5); scene.add(head);
-    const pool = new THREE.Mesh(new THREE.CircleGeometry(3.4, 24), new THREE.MeshBasicMaterial({ color: 0xffdCA0, transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+    const pool = new THREE.Mesh(new THREE.CircleGeometry(4.0, 24), new THREE.MeshBasicMaterial({ color: 0xffdCA0, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
     pool.rotation.x = -Math.PI / 2; pool.position.set(lx, 0.0, zFront + 6.5); scene.add(pool);
+    // soft light cone from head to ground (classic volumetric fake)
+    const cone = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.25, 2.6, 5.4, 18, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xffe0b0, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false }),
+    );
+    cone.position.set(lx, 2.75, zFront + 6.5); scene.add(cone);
+    if (li === 1) flicker.push({ head, pool, cone, t: 1, on: true }); // middle lamp is dying
+  });
+  // warm light spill from the storefront onto the sidewalk
+  const spill = new THREE.Mesh(new THREE.PlaneGeometry(9, 4.5), new THREE.MeshBasicMaterial({
+    map: canvasTex(128, 64, (x) => {
+      const g = x.createLinearGradient(0, 0, 0, 64);
+      g.addColorStop(0, 'rgba(255,228,180,0.5)'); g.addColorStop(1, 'rgba(255,228,180,0)');
+      x.fillStyle = g; x.fillRect(0, 0, 128, 64);
+    }),
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, opacity: 0.5,
+  }));
+  spill.rotation.x = -Math.PI / 2; spill.rotation.z = Math.PI;
+  spill.position.set(0, 0.004, zFront + 2.3); scene.add(spill);
+  // stars
+  {
+    const n = 260, pos = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, e = 0.15 + Math.random() * 0.75;
+      const r = 82;
+      pos[i * 3] = Math.cos(a) * Math.cos(e) * r;
+      pos[i * 3 + 1] = Math.sin(e) * r;
+      pos[i * 3 + 2] = zFront + Math.sin(a) * Math.cos(e) * r;
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const stars = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xcdd8e8, size: 0.22, sizeAttenuation: true, transparent: true, opacity: 0.8, fog: false }));
+    scene.add(stars);
   }
   // distant strip-mall silhouettes with lit windows
   for (const [bx, bz, bw, bh] of [[-30, 34, 26, 9], [16, 40, 30, 7], [40, 26, 18, 11]]) {
     const b = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 10), new THREE.MeshBasicMaterial({ map: buildingTex(), fog: false }));
     b.position.set(bx, bh / 2, zFront + bz); scene.add(b);
   }
+  return { flicker };
 }
 
 // ------------------------------------------------------------- lighting
@@ -724,7 +760,9 @@ function lighting(scene) {
     s.shadow.camera.near = 0.5; s.shadow.camera.far = 14; s.shadow.bias = -0.0005;
     scene.add(s, s.target);
   }
-  scene.add(new THREE.HemisphereLight(0xcfe0f0, 0x39352f, 0.34));
+  // darker ambient floor = real contrast; the troffers/spots carve pools out
+  // of it instead of everything sitting at the same mid-bright level
+  scene.add(new THREE.HemisphereLight(0xcfe0f0, 0x262421, 0.21));
 }
 
 // ------------------------------------------------------------- set dressing
@@ -1154,6 +1192,41 @@ function floorZones(scene) {
   zone(12, -8.5, 18, 10.4, 0x3c4048);   // electronics: cool dark carpet
 }
 
+// Fake contact AO: dark gradient strips on the floor along every large
+// fixture's base. Grounding is the single biggest "rendered vs real" tell,
+// and this buys it for one instanced draw call.
+function contactAO(scene, colliders) {
+  // symmetric soft band centered on the fixture edge — orientation-proof
+  const tex = canvasTex(64, 32, (x) => {
+    const g = x.createLinearGradient(0, 0, 0, 32);
+    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.5, 'rgba(0,0,0,0.40)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+    x.fillStyle = g; x.fillRect(0, 0, 64, 32);
+  });
+  const geo = new THREE.PlaneGeometry(1, 0.34);
+  const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+  const strips = [];
+  for (const c of colliders) {
+    const w = c.maxX - c.minX, d2 = c.maxZ - c.minZ;
+    if (Math.max(w, d2) < 1.6) continue; // only substantial fixtures
+    strips.push([ (c.minX + c.maxX) / 2, c.maxZ, w, 0 ]);          // +z side
+    strips.push([ (c.minX + c.maxX) / 2, c.minZ, w, Math.PI ]);    // -z side
+    strips.push([ c.maxX, (c.minZ + c.maxZ) / 2, d2, -Math.PI / 2 ]);
+    strips.push([ c.minX, (c.minZ + c.maxZ) / 2, d2, Math.PI / 2 ]);
+  }
+  const im = new THREE.InstancedMesh(geo, mat, strips.length);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3();
+  const flat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+  strips.forEach(([x, z, len, rotY], i) => {
+    q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotY).multiply(flat);
+    m.compose(p.set(x, 0.006, z), q, s.set(len, 1, 1));
+    im.setMatrixAt(i, m);
+  });
+  im.instanceMatrix.needsUpdate = true;
+  im.computeBoundingSphere();
+  im.renderOrder = 2;
+  scene.add(im);
+}
+
 // photoscanned props from the model kit (all optional — no kit, no props)
 function kitProps(scene, colliders) {
   // wine nook: wooden display shelf + bottle collection on a plinth (back-left)
@@ -1393,7 +1466,7 @@ export function buildStore(scene, loader) {
   kitProps(scene, colliders);
 
   // set dressing (endcaps + checkout racks add product slots — before buildStock)
-  exterior(scene, loader);
+  const ext = exterior(scene, loader);
   endcaps(scene, slots, colliders, rng);
   palletStacks(scene, colliders, rng);
   checkoutExtras(scene, slots, rng);
@@ -1401,6 +1474,8 @@ export function buildStore(scene, loader) {
   wallDressing(scene);
   floorProps(scene, colliders);
   saleTags(scene, rng);
+
+  contactAO(scene, colliders);
 
   // instantiate all products + price tags
   const stock = buildStock(scene, slots);
@@ -1443,6 +1518,18 @@ export function buildStore(scene, loader) {
         door.g.position.x = THREE.MathUtils.lerp(door.closedX, door.openX, e);
       }
       if (ring.visible) { const s = 1 + Math.sin(t * 4) * 0.08; ring.scale.setScalar(s); }
+      // the dying parking-lot lamp: mostly on, with nervous dropouts
+      for (const f of ext.flicker) {
+        f.t -= dt;
+        if (f.t <= 0) {
+          f.on = f.on === false ? true : Math.random() > 0.08;
+          f.t = f.on ? 0.4 + Math.random() * 2.2 : 0.05 + Math.random() * 0.18;
+          const k = f.on ? 1 : 0.12;
+          f.head.material.emissiveIntensity = 2.4 * k;
+          f.pool.material.opacity = 0.2 * k;
+          f.cone.material.opacity = 0.05 * k;
+        }
+      }
     },
   };
 }

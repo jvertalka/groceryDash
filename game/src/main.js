@@ -5,6 +5,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/examples/jsm/postprocessing/GTAOPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { makeCinematicPass } from './cinematic.js';
 
 import { loadEnvironment } from './env.js';
 import { preloadModels } from './models.js';
@@ -29,7 +30,7 @@ try {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = 0.86;
   app.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -85,6 +86,8 @@ try {
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.16, 0.5, 0.96);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
+  const cinematic = makeCinematicPass();
+  composer.addPass(cinematic); // grade in display space, all tiers
 
   // ---------------------------------------------------------------- controls
   // Pointer lock when the browser allows it; otherwise (sandboxed iframes,
@@ -223,6 +226,7 @@ try {
   function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
+    cinematic.uniforms.uTime.value = (cinematic.uniforms.uTime.value + dt) % 1000;
     autoQuality(dt);
     move(dt);
     world.stock.cull(camera.position);
