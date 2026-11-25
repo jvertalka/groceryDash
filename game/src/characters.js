@@ -166,6 +166,27 @@ function bakeRetarget(donorRoot, donorSkin, tgtRoot, tgtSkin, clip, names, fps =
       if (tgtRestQ[key]) tgtRestQ[key] = qFix.clone().multiply(tgtRestQ[key]);
     }
   }
+  // Facing alignment. The delta below is a WORLD-space rotation, so it only means
+  // the same thing on both rigs when they face the same way. The donor faces -Z
+  // and a Biped faces +Z: un-aligned, "lower the arm" (a roll about Z) turned
+  // into "raise the arm", spines leaned backwards and knees folded forwards —
+  // every shopper walked the store with both hands in the air. Conjugating each
+  // delta by the yaw between the two rigs re-expresses it in the target's frame.
+  const yawOf = (bones, pairs) => {
+    const fwd = new THREE.Vector3();
+    for (const [toe, foot] of pairs) {
+      if (!bones[toe] || !bones[foot]) continue;
+      const a = bones[toe].getWorldPosition(new THREE.Vector3()), b = bones[foot].getWorldPosition(new THREE.Vector3());
+      fwd.x += a.x - b.x; fwd.z += a.z - b.z; // summing both feet cancels toe splay
+    }
+    return fwd.lengthSq() > 1e-10 ? Math.atan2(fwd.x, fwd.z) : 0;
+  };
+  const srcYaw = yawOf(srcBones, [[names.Bip01_L_Toe0, names.Bip01_L_Foot], [names.Bip01_R_Toe0, names.Bip01_R_Foot]]);
+  const tgtYaw = yawOf(tgtBones, [['Bip01_L_Toe0', 'Bip01_L_Foot'], ['Bip01_R_Toe0', 'Bip01_R_Foot']]);
+  const relYaw = Math.round((tgtYaw - srcYaw) / (Math.PI / 2)) * (Math.PI / 2); // rigs are axis-aligned
+  const faceQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), relYaw);
+  const faceQinv = faceQ.clone().invert();
+
   const hipT = 'Bip01_Pelvis', hipS = names[hipT];
   const srcHipRestY = srcBones[hipS] ? srcBones[hipS].getWorldPosition(new THREE.Vector3()).y : 1;
   const tgtHipRestLocal = tgtRestPos[hipT] ? tgtRestPos[hipT].clone() : new THREE.Vector3();
@@ -192,10 +213,11 @@ function bakeRetarget(donorRoot, donorSkin, tgtRoot, tgtSkin, clip, names, fps =
     for (const tName of order) {
       const sName = names[tName];
       const t = tgtBones[tName];
-      // delta = srcWorldNow * inv(srcWorldRest); tgtWorldNew = delta * tgtWorldRest
+      // delta = srcWorldNow * inv(srcWorldRest), re-expressed in the target's
+      // facing frame (F * delta * inv(F)); tgtWorldNew = that * tgtWorldRest
       srcBones[sName].getWorldQuaternion(wq);
       inv.copy(srcRestQ[sName]).invert();
-      dq.copy(wq).multiply(inv).multiply(tgtRestQ[tName]);
+      dq.copy(faceQ).multiply(wq).multiply(inv).multiply(faceQinv).multiply(tgtRestQ[tName]);
       // to local: inv(parentWorldNow) * tgtWorldNew
       t.parent.getWorldQuaternion(pq).invert();
       t.quaternion.copy(pq).multiply(dq);
@@ -318,6 +340,14 @@ export function createShoppers(scene, manager, world) {
     for (const name of PEOPLE) {
       try {
         const fbx = await fbxLoader.loadAsync(`assets/models/people/${name}/model.fbx`);
+        // An FBX carries its authoring scene's ambient colour, and FBXLoader turns
+        // that into an AmbientLight(#808080, 1) on every group it returns. Cloned
+        // into a cast of 13 that was 13 full-strength ambient lights: the whole
+        // store rendered flat and blown out to white, and the car park at night
+        // was lit like noon. Strip anything that is not the avatar itself.
+        const strays = [];
+        fbx.traverse((o) => { if (o.isLight || o.isCamera) strays.push(o); });
+        for (const o of strays) o.removeFromParent();
         dressAvatar(fbx, name, texLoader);
         // centimetres -> metres, normalised to human height
         const s = TARGET_H / boneSpan(fbx).h;
