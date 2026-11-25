@@ -9,6 +9,7 @@
 //   npm run shots          (in another)   -> game/.shots/<timestamp>/*.jpg + report.json
 //
 //   node scripts/snap.mjs --out .shots/before --only aisle,checkout --perf
+//   node scripts/snap.mjs --size 2560x1300 --dpr 1.5 --perf     (a maximised window on a 4K panel at 150%)
 //
 // Why this exists: for most of this project every "visual" check was numeric
 // (pixel grids, draw counts). Numbers said the store was fine while it rendered
@@ -25,7 +26,8 @@ const flag = (name) => args.includes('--' + name);
 const URL_ = opt('url', 'http://localhost:5173/');
 const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
 const OUT = resolve(opt('out', join('.shots', stamp)));
-const [W, H] = opt('size', '1920x1080').split('x').map(Number);
+const [W, H] = opt('size', '1920x1080').split('x').map(Number); // window size in CSS pixels
+const DPR = Number(opt('dpr', '1')); // display scaling to emulate: 1.5 for a 4K laptop panel at 150%
 const ONLY = opt('only', '').split(',').map((s) => s.trim()).filter(Boolean);
 const MODE = opt('mode', 'zen');
 const TIER = opt('tier', ''); // '', 'lite' or 'high' — pin the quality tier for the whole run
@@ -65,7 +67,7 @@ const CHROME = [
 ].filter(Boolean).find((p) => existsSync(p));
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const report = { url: URL_, size: [W, H], startedAt: new Date().toISOString(), views: [] };
+const report = { url: URL_, size: [W, H], dpr: DPR, startedAt: new Date().toISOString(), views: [] };
 let chrome = null, ws = null;
 const profile = join(OUT, '.chrome-profile');
 
@@ -77,7 +79,7 @@ async function main() {
   const port = 9400 + Math.floor(Math.random() * 500);
   chrome = spawn(CHROME, [
     '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
-    `--window-size=${W},${H}`, '--enable-gpu', '--ignore-gpu-blocklist', '--force-device-scale-factor=1',
+    `--window-size=${W},${H}`, '--enable-gpu', '--ignore-gpu-blocklist', `--force-device-scale-factor=${DPR}`,
     '--no-first-run', '--no-default-browser-check', '--mute-audio',
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
     '--disable-backgrounding-occluded-windows', 'about:blank',
@@ -111,7 +113,7 @@ async function main() {
   const save = (name, dataUrl) => writeFileSync(join(OUT, name + '.jpg'), Buffer.from(dataUrl.split(',')[1], 'base64'));
 
   await send('Page.enable'); await send('Runtime.enable');
-  await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+  await send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: DPR, mobile: false });
   const t0 = Date.now();
   await send('Page.navigate', { url: URL_ });
   await sleep(1500);
