@@ -236,6 +236,15 @@ try {
     window.__tier = 'lite';
     window.__resScale = () => resScale;
   }
+  // capture/measurement hook: pin the tier and render scale so scripts/snap.mjs
+  // gets full-resolution frames and stable numbers; call with nothing to release
+  let pinned = false;
+  window.__pinQuality = (o) => {
+    pinned = !!o;
+    if (!o) { settleCd = 3; wn = 0; wi = 0; return; }
+    if (o.tier) applyTier(o.tier);
+    if (o.res) { resScale = o.res; applyRes(); }
+  };
   function autoQuality(dt) {
     frames++;
     if (frames === 3) {
@@ -243,6 +252,7 @@ try {
       scene.traverse((o) => { if (o.isSpotLight) { o.shadow.needsUpdate = true; o.shadow.autoUpdate = false; } });
     }
     if (frames < 30) return; // ignore warm-up
+    if (pinned) return;
     win[wi] = dt; wi = (wi + 1) % win.length; wn = Math.min(wn + 1, win.length);
     if (settleCd > 0) { settleCd -= dt; return; }
     if (wn < win.length) return;
