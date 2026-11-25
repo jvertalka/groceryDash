@@ -211,14 +211,22 @@ try {
       }
     });
   }
-  // DYNAMIC RESOLUTION (the AAA no-lag tool): render scale floats 0.7–1.15,
-  // nudged every ~0.75s to hold frame time; tiers only toggle the passes.
-  let resScale = Math.min(devicePixelRatio, 1.0);
+  // DYNAMIC RESOLUTION: the scene renders at resScale × the window's CSS size
+  // (0.7–1.15), moved in small steps to hold the display's frame rate; tiers
+  // only toggle the passes.
+  const RES_MIN = 0.75;
+  const BUDGET_PX = 3.0e6; // scene pixels we are willing to shade, whatever the window and display scaling
   const resMax = () => (tier === 'high' ? Math.min(devicePixelRatio, 1.25) : Math.min(devicePixelRatio, 1.15));
+  const resCap = () => Math.max(RES_MIN, Math.min(resMax(), Math.sqrt(BUDGET_PX / Math.max(1, innerWidth * innerHeight))));
+  let resScale = Math.min(1.0, resCap());
   let resCd = 0;
   function applyRes() {
     renderer.setPixelRatio(resScale);
-    composer.setSize(innerWidth, innerHeight);
+    // EffectComposer keeps its OWN pixel ratio, captured when it is built.
+    // Only setting the renderer's left every scene target at its construction
+    // size whatever resScale said: on a 4K panel at 150% that was 1.25× CSS,
+    // about 3200×1800 with MSAA, and this controller could not change it.
+    composer.setPixelRatio(resScale); // resizes both targets and every pass
   }
   function applyTier(t) {
     if (t === tier) return;
@@ -226,7 +234,7 @@ try {
     settleCd = 3; wn = 0; wi = 0;
     if (t === 'high') { gtao.enabled = true; setLights(true, true); }
     else { gtao.enabled = false; setLights(false, false); }
-    resScale = Math.min(resScale, resMax());
+    resScale = Math.min(resScale, resCap());
     applyRes();
   }
   { // boot into lite
@@ -236,6 +244,8 @@ try {
     window.__tier = 'lite';
     window.__resScale = () => resScale;
   }
+  const SLOW = 0.0176, STEADY = 0.0170; // sustained under ~57 fps / holding ~59+
+  let qClock = 0, lastCut = null, holdUntil = 0, holdLen = 12, probeWait = 8, lastStepUp = 0;
   // capture/measurement hook: pin the tier and render scale so scripts/snap.mjs
   // gets full-resolution frames and stable numbers; call with nothing to release
   let pinned = false;
@@ -253,19 +263,46 @@ try {
     }
     if (frames < 30) return; // ignore warm-up
     if (pinned) return;
+    qClock += dt; resCd -= dt;
     win[wi] = dt; wi = (wi + 1) % win.length; wn = Math.min(wn + 1, win.length);
     if (settleCd > 0) { settleCd -= dt; return; }
     if (wn < win.length) return;
     let sum = 0; for (let i = 0; i < wn; i++) sum += win[i];
     const avg = sum / wn;
-    // continuous resolution control
-    resCd -= dt;
+    // Resolution control. Frame intervals are vsync-quantised: a display that
+    // is holding 60 fps reports 16.7 ms whether the frame took 6 ms or 16, so
+    // there is never a "we have headroom" reading to act on. So: cut when the
+    // rate sags, then check the cut bought something. If it did not, pixels
+    // are not what is slow in this view (the frame is draw-call bound): give
+    // them back, drift up to the cap and leave resolution alone for a while,
+    // longer each time it happens. When the rate is steady, probe upward now
+    // and then; a probe that costs frames is cut again and the next one waits
+    // longer.
     if (resCd <= 0) {
-      let next = resScale;
-      if (avg > 0.022) next = Math.max(0.7, resScale - 0.07);
-      else if (avg < 0.014) next = Math.min(resMax(), resScale + 0.05);
-      if (Math.abs(next - resScale) > 0.02) { resScale = next; applyRes(); resCd = 0.75; }
-      else resCd = 0.4;
+      const settle = () => { wn = 0; wi = 0; resCd = 1; }; // judge the next step on fresh frames only
+      const cap = resCap();
+      if (lastCut) {
+        const cut = lastCut; lastCut = null;
+        if (avg > cut.avg * 0.97) {
+          resScale = cut.from; applyRes(); settle();
+          holdUntil = qClock + holdLen; holdLen = Math.min(holdLen * 2, 120);
+          return;
+        }
+        holdLen = 12;
+      }
+      if (qClock < holdUntil) {
+        if (resScale < cap - 0.005 && qClock - lastStepUp > 2.5) {
+          resScale = Math.min(cap, resScale + 0.08); applyRes(); settle(); lastStepUp = qClock;
+        } else resCd = 0.4;
+      } else if (avg > SLOW && resScale > RES_MIN + 0.005) {
+        lastCut = { from: resScale, avg };
+        resScale = Math.max(RES_MIN, resScale - 0.08); applyRes(); settle();
+        probeWait = Math.min(probeWait * 1.6, 60); lastStepUp = qClock;
+      } else if (avg < STEADY && resScale < cap - 0.005 && qClock - lastStepUp > probeWait) {
+        probeWait = Math.max(8, probeWait * 0.8); // the last step up held
+        resScale = Math.min(cap, resScale + 0.05); applyRes(); settle(); lastStepUp = qClock;
+      } else resCd = 0.4;
+      if (wn < win.length) return;
     }
     // pass/light tiers move only on sustained extremes
     if (tier === 'lite') {
@@ -301,8 +338,10 @@ try {
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
-    composer.setSize(innerWidth, innerHeight);
-    gtao.setSize(innerWidth, innerHeight);
+    resScale = Math.min(resScale, resCap()); // a bigger window must not blow the pixel budget
+    renderer.setPixelRatio(resScale);
+    composer.setPixelRatio(resScale);
+    composer.setSize(innerWidth, innerHeight); // sizes every pass, GTAO included, at the current render scale
   });
 
   world.playerSpeed = () => Math.hypot(playerVel.x, playerVel.z);
